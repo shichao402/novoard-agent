@@ -29,7 +29,7 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
 
   function runStep(step, vars, index) {
     if (typeof step.script === "string") {
-      return execScript(step.script, {
+      return execScript(interp(step.script, vars), {
         cwd: step.cwd ? interp(step.cwd, vars) : cwd,
         env: step.env ? mapEnv(step.env, vars) : undefined,
         index,
