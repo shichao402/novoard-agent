@@ -48,16 +48,22 @@ function expandedAll(out) {
   return Object.values(out).every((t) => Array.isArray(t.expanded) && t.expanded.length >= 1);
 }
 
-/** 从 targets 派生 Agent Card（契约 §2 生成规则）。 */
+/** 从 targets 派生 Agent Card（契约 §2 生成规则；v1.1：offline 策略随 skill 透传）。 */
 export function deriveCard({ agentId, targets, description, version = "1.0.0" }) {
   const skills = Object.entries(targets)
     .filter(([, t]) => t.expose === "a2a")
-    .map(([id, t]) => ({
-      id,
-      name: t.title,
-      description: `${t.title}；vars: ${Object.keys(t.vars ?? {}).join(", ") || "无"}`,
-      tags: ["novoard"],
-    }));
+    .map(([id, t]) => {
+      const skill = {
+        id,
+        name: t.title,
+        description: `${t.title}；vars: ${Object.keys(t.vars ?? {}).join(", ") || "无"}`,
+        tags: ["novoard"],
+      };
+      if (t.offline) {
+        skill["x-novoard-offline"] = { policy: t.offline, ...(t.offlineTtl ? { ttl: t.offlineTtl } : {}) };
+      }
+      return skill;
+    });
   return {
     name: agentId,
     description: description ?? `${agentId} · lite-agent`,
