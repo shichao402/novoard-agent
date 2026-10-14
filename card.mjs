@@ -62,6 +62,9 @@ export function deriveCard({ agentId, targets, description, version = "1.0.0" })
       if (t.offline) {
         skill["x-novoard-offline"] = { policy: t.offline, ...(t.offlineTtl ? { ttl: t.offlineTtl } : {}) };
       }
+      if (t.notify) {
+        skill["x-novoard-notify"] = t.notify; // M3 F2：通知策略透传（always/on-failure/never），hub 查表过滤终态通知
+      }
       return skill;
     });
   return {
