@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "novoard/frame-agent-ping.json",
+  "title": "ops 帧 agent.ping（心跳，双向）",
+  "type": "object",
+  "required": ["type", "ts"],
+  "properties": {
+    "type": { "const": "agent.ping" },
+    "ts": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "novoard/task.json",
+  "title": "A2A task 对象（字面对齐 A2A spec，契约 §5.2）",
+  "type": "object",
+  "required": ["id", "kind", "status"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^task-" },
+    "contextId": {
+      "type": "string",
+      "description": "父任务关联：hub 下发时父任务 id，agent 上行原样带回（契约 §4.3）"
+    },
+    "kind": { "const": "task" },
+    "status": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": ["submitted", "working", "input-required", "completed", "failed", "canceled", "rejected"]
+        },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "parts"],
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": { "type": "string" },
+                "text": { "type": "string" },
+                "uri": {
+                  "type": "string",
+                  "description": "超限 artifact 走上传端点后以 URL 引用（契约 §7）"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "history": { "type": "array", "items": { "type": "object" } },
+    "metadata": { "type": "object" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "novoard/frame-telemetry.json",
+  "title": "ops 帧 telemetry（可选，频率配置）",
+  "type": "object",
+  "required": ["type", "ts", "cpuPct", "memPct", "diskPct"],
+  "properties": {
+    "type": { "const": "telemetry" },
+    "ts": { "type": "string", "format": "date-time" },
+    "cpuPct": { "type": "number", "minimum": 0, "maximum": 100 },
+    "memPct": { "type": "number", "minimum": 0, "maximum": 100 },
+    "diskPct": { "type": "number", "minimum": 0, "maximum": 100 }
+  },
+  "additionalProperties": false
+}

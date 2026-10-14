@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "novoard/frame-card-update.json",
+  "title": "ops 帧 card.update（target 定义变更后推送）",
+  "type": "object",
+  "required": ["type", "card"],
+  "properties": {
+    "type": { "const": "card.update" },
+    "card": { "$ref": "agent-card.json" }
+  },
+  "additionalProperties": false
+}

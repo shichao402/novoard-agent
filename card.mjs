@@ -6,7 +6,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { parse } from "yaml";
-import { createFrameValidator } from "../frames.mjs";
+import { createFrameValidator } from "./contract/frames.mjs";
 
 export function loadTargets({ agentDir, validate }) {
   const targetsPath = join(agentDir, "targets.yaml");

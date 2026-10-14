@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "novoard/a2a-envelope.json",
+  "title": "隧道私有信封（hub ↔ agent，契约 §4.2）",
+  "type": "object",
+  "required": ["v", "kind", "msgId"],
+  "properties": {
+    "v": { "const": 1 },
+    "kind": { "enum": ["ops", "a2a", "ack"] },
+    "msgId": {
+      "type": "string",
+      "pattern": "^e-[A-Za-z0-9-]+$",
+      "description": "信封级幂等 id，重发同 msgId 即重放（契约 §4.4）"
+    },
+    "ts": { "type": "string", "format": "date-time" },
+    "taskId": { "type": "string", "pattern": "^task-" },
+    "body": {
+      "type": "object",
+      "description": "完整帧对象：ops 时为 §3.1 帧原样，a2a 时为 JSON-RPC 消息原样"
+    },
+    "dedup": {
+      "type": "boolean",
+      "description": "ack 专用：true 表示此前已收过（重复投递）"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "a2a" } } },
+      "then": { "required": ["taskId", "body", "ts"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "ops" } } },
+      "then": { "required": ["body", "ts"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "ack" } } },
+      "then": { "required": ["dedup"] }
+    }
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "novoard/audit-event.json",
+  "title": "审计流水 JSONL 单行事件（契约 §6）",
+  "type": "object",
+  "required": ["ts", "actor", "lane", "target", "outcome"],
+  "properties": {
+    "ts": { "type": "string", "format": "date-time" },
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "description": "human / client-id / agent-cron / rule-engine"
+    },
+    "lane": { "enum": ["a2a", "ops", "local"] },
+    "target": { "type": "string", "minLength": 1 },
+    "taskId": { "type": "string", "pattern": "^task-" },
+    "outcome": {
+      "enum": ["submitted", "working", "input-required", "completed", "failed", "canceled", "rejected", "accepted"]
+    },
+    "audit": { "enum": ["none", "summary", "full"] },
+    "member": { "type": "string" },
+    "detail": { "type": "object" }
+  },
+  "additionalProperties": false
+}

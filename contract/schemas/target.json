@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "novoard/target.json",
+  "title": "Novoard target 定义（agent 侧 YAML 转 JSON 后校验，启动自检用）",
+  "type": "object",
+  "required": ["targets"],
+  "properties": {
+    "targets": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/target" }
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "required": ["title", "expose", "audit", "requiresApproval", "notify"],
+      "oneOf": [
+        { "required": ["steps"] },
+        { "required": ["template"] }
+      ],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "schedule": { "type": "string", "description": "cron 表达式，调度归 agent 本地（ADR-0003）" },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/step" }
+        },
+        "template": { "type": "string", "minLength": 1 },
+        "vars": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] }
+        },
+        "expose": { "enum": ["a2a", "local"] },
+        "audit": { "enum": ["none", "summary", "full"] },
+        "requiresApproval": { "type": "boolean" },
+        "notify": { "enum": ["always", "on-failure", "never"] },
+        "offline": {
+          "enum": ["reject", "queue"],
+          "default": "reject",
+          "description": "成员离线时触发策略（契约 §1.1，M2）：reject 拒绝；queue 入队等上线自动下发（TTL 到期转 failed）"
+        },
+        "offlineTtl": {
+          "type": "string",
+          "pattern": "^\\d+(s|m|h|d)$",
+          "default": "30m",
+          "description": "offline: queue 的等待上限，如 30m / 2h / 1d；到期未上线转 failed"
+        }
+      },
+      "additionalProperties": false
+    },
+    "step": {
+      "oneOf": [
+        { "$ref": "#/$defs/stepScript" },
+        { "$ref": "#/$defs/stepOpenApp" },
+        { "$ref": "#/$defs/stepOpenPath" },
+        { "$ref": "#/$defs/stepTemplate" }
+      ]
+    },
+    "stepScript": {
+      "type": "object",
+      "required": ["script"],
+      "properties": {
+        "script": { "type": "string", "minLength": 1 },
+        "cwd": { "type": "string" },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "stepOpenApp": {
+      "type": "object",
+      "required": ["openApp"],
+      "properties": { "openApp": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    "stepOpenPath": {
+      "type": "object",
+      "required": ["openPath"],
+      "properties": { "openPath": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    "stepTemplate": {
+      "type": "object",
+      "required": ["template"],
+      "properties": { "template": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    }
+  }
+}
