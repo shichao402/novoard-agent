@@ -135,8 +135,8 @@ function renderForm(){
   h+=field("requiresApproval",'<input type="checkbox" data-f="requiresApproval" onchange="bind(this)"'+(t.requiresApproval?" checked":"")+">");
   h+="</div>";
   h+='<div class="section"><h3>执行定义</h3><div class="row" style="margin-bottom:10px">';
-  h+='<label class="radio"><input type="radio" name="deftype" onchange="setDefType(\'steps\')"'+(usesTpl?"":" checked")+"> 内联 steps</label>&nbsp;&nbsp;";
-  h+='<label class="radio"><input type="radio" name="deftype" onchange="setDefType(\'template\')"'+(usesTpl?" checked":"")+"> 模板引用</label></div>";
+  h+='<label class="radio"><input type="radio" name="deftype" value="steps" onchange="setDefType(this.value)"'+(usesTpl?"":" checked")+"> 内联 steps</label>&nbsp;&nbsp;";
+  h+='<label class="radio"><input type="radio" name="deftype" value="template" onchange="setDefType(this.value)"'+(usesTpl?" checked":"")+"> 模板引用</label></div>";
   if(usesTpl){
     h+=field("template 名",input("template",t.template||""));
     h+='<div class="hint">引用 agents/&lt;agentId&gt;/templates/&lt;名&gt;.yaml（模板文件暂不在编辑器管理范围）</div>';
