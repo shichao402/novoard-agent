@@ -23,10 +23,17 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
   const replayFile = join(stateDirResolved, "replay.jsonl");
   /** taskId → 未确认上行帧（msgId 不变，重放去重靠 hub） */
   const pending = new Map();
+  /** 委派查表（可热替换：editor 保存后 replaceTargets，与 runtime/localA2A 同步） */
+  let currentTargets = targets;
   let ws = null;
   let connected = false;
   let registered = false;
   let stopped = false;
+
+  /** 热替换委派查表（editor 保存路径）：新委派立即路由到新定义。 */
+  function replaceTargets(next) {
+    currentTargets = next;
+  }
   /** msgId → 已被 hub ack 的taskId（ack 即可清缓存） */
   const ackedTasks = new Set();
 
@@ -68,6 +75,13 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
     send({ v: 1, kind: "ops", msgId: newMsgId(), ts: new Date().toISOString(), body });
   }
 
+  /** card.update 上行（editor 保存路径）：帧结构按 frame-card-update schema（type + card）。 */
+  function sendCardUpdate(cardOverride) {
+    if (!registered) return { ok: false, reason: "not-registered" };
+    ops({ type: "card.update", card: cardOverride ?? getCard() });
+    return { ok: true };
+  }
+
   async function uploadArtifact(taskId, { name, filePath, content }) {
     const data = content ?? (filePath ? readFileSync(filePath, "utf8") : "");
     if (!data) throw new Error("artifact 无内容");
@@ -79,6 +93,11 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
     if (!res.ok) throw new Error(`artifact 上传失败：${res.status}`);
     return res.json();
   }
+
+  /** card 热引用（editor 保存后装配层 replaceCard；hello/card.update 均取最新）。 */
+  let currentCard = card;
+  function getCard() { return currentCard; }
+  function replaceCard(next) { currentCard = next; }
 
   /** 连接 + hello + 自动重连（指数退避封顶 30s）。 */
   async function start() {
@@ -98,7 +117,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
           contractVersion,
           agentId,
           token: agentToken,
-          card,
+          card: getCard(),
           inFlightTaskIds,
         });
         resolve(true);
@@ -178,7 +197,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
       return;
     }
     const { skillId, vars } = parsed;
-    const runCfg = targets?.[skillId];
+    const runCfg = currentTargets?.[skillId];
     if (!runCfg) {
       uplink(env.taskId, statusNotification(env.taskId, "failed", `unknown target：${skillId}`));
       return;
@@ -263,7 +282,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
     });
   }
 
-  return { start, uplink, uplinkTerminal, uploadArtifact, ops, close, get connected() { return connected; }, get registered() { return registered; } };
+  return { start, uplink, uplinkTerminal, uploadArtifact, ops, sendCardUpdate, replaceTargets, replaceCard, close, get connected() { return connected; }, get registered() { return registered; } };
 }
 
 const TERMINAL_OK = new Set(["completed", "failed", "canceled"]);

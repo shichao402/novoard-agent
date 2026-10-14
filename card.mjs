@@ -9,15 +9,28 @@ import { parse } from "yaml";
 import { createFrameValidator } from "../frames.mjs";
 
 export function loadTargets({ agentDir, validate }) {
-  const validator = validate ?? createFrameValidator();
   const targetsPath = join(agentDir, "targets.yaml");
   if (!existsSync(targetsPath)) {
     return { ok: false, reason: `targets.yaml 不存在：${targetsPath}` };
   }
-  const data = parse(readFileSync(targetsPath, "utf8"));
+  let data;
+  try {
+    data = parse(readFileSync(targetsPath, "utf8"));
+  } catch (error) {
+    return { ok: false, reason: `targets.yaml 解析失败：${error.message}` };
+  }
+  return validateTargetsData(data, validate);
+}
+
+/** 校验已解析的 targets 定义（装载期与 editor 保存共用同一条路，纪律一：不合法定义不上盘）。 */
+export function validateTargetsData(data, validate) {
+  const validator = validate ?? createFrameValidator();
+  if (!data || typeof data !== "object" || !data.targets) {
+    return { ok: false, reason: "定义缺少顶层 targets 键", errors: ["缺少顶层 targets 键（targets: {...}）"] };
+  }
   const res = validator.targets(data);
   if (!res.ok) {
-    return { ok: false, reason: `targets.yaml 校验失败（纪律一）：${res.errors.join("; ")}` };
+    return { ok: false, reason: `targets 校验失败（纪律一）：${res.errors.join("; ")}`, errors: res.errors };
   }
   return { ok: true, targets: data.targets };
 }

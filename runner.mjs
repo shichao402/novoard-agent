@@ -35,8 +35,8 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
         index,
       });
     }
-    if (typeof step.openApp === "string") return execScript(`open ${JSON.stringify(interp(step.openApp, vars))}`, { index });
-    if (typeof step.openPath === "string") return execScript(`open ${JSON.stringify(interp(step.openPath, vars))}`, { index });
+    if (typeof step.openApp === "string") return execScript(openCmd(step.openApp, vars), { index });
+    if (typeof step.openPath === "string") return execScript(openCmd(step.openPath, vars), { index });
     return Promise.resolve({ ok: false, stderr: `未知 step 类型：${JSON.stringify(Object.keys(step))}` });
   }
 
@@ -64,6 +64,14 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
   function describeStep(step, index) {
     const head = typeof step.script === "string" ? step.script : typeof step.openApp === "string" ? `openApp ${step.openApp}` : `openPath ${step.openPath ?? ""}`;
     return `step ${index + 1}/${steps.length}: ${head.slice(0, 60)}`;
+  }
+
+  /** openApp/openPath 平台化：win32 用 start，darwin 用 open，linux 用 xdg-open。 */
+  function openCmd(target, vars) {
+    const value = JSON.stringify(interp(target, vars));
+    if (process.platform === "win32") return `start "" ${value}`;
+    if (process.platform === "linux") return `xdg-open ${value}`;
+    return `open ${value}`;
   }
 
   /** 插值：无来源抛错（契约 §1.2），失败归入 target failed。 */

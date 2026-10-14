@@ -9,6 +9,7 @@
  * 鉴权：仅监听 127.0.0.1（本机边界即鉴权边界，契约 §8 单用户试点语义）。
  */
 import { createServer } from "node:http";
+import { editorPage } from "./editor-page.mjs";
 
 const TERMINAL = new Set(["completed", "failed", "canceled", "rejected"]);
 
@@ -27,12 +28,29 @@ function createLocalTasks() {
   };
 }
 
-export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = console, triggerHook } = {}) {
+export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved } = {}) {
   const tasks = createLocalTasks();
+  /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
+  let currentTargets = targets;
+  const getTargets = () => currentTargets ?? {};
+
+  /** 写端点同源校验（localhost HTTP 服务标准加固）：Host 必须本机回环；带 Origin 时必须同源。
+   *  挡跨站表单 POST（浏览器不给跨域 PUT 发简单请求预检外的都带 Origin）与 DNS rebinding。 */
+  function sameOrigin(req) {
+    let host = String(req.headers.host ?? "");
+    if (host.startsWith("[")) host = host.slice(0, host.indexOf("]") + 1); // [::1] / [::1]:port
+    else host = host.split(":")[0];
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(host)) return false;
+    const origin = req.headers.origin;
+    if (origin) {
+      try { if (new URL(origin).hostname !== host.replace(/^\[|\]$/g, "")) return false; } catch { return false; }
+    }
+    return true;
+  }
 
   /** 触发本地执行：生成 taskId → runtime.launch → 状态落本地表。 */
   function trigger({ skillId, vars = {} }) {
-    const def = targets[skillId];
+    const def = getTargets()[skillId];
     if (!def) return { ok: false, reason: `unknown target: ${skillId}` };
     // taskId 用 task-local- 前缀：过 hub 信封 ^task- 校验（终态上行镜像合法），且与 hub 序列（task-YYYYMMDD-NNN）不撞形
     const id = `task-local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -84,6 +102,38 @@ export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = 
 
   const server = createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
+    // target 编辑器页（M6）：零构建单页，同磁贴页纪律
+    if (req.method === "GET" && url.pathname === "/editor") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(editorPage());
+      return;
+    }
+    // 编辑器数据源：盘上定义（YAML 原文 + 解析后 targets + 平台提示）
+    if (req.method === "GET" && url.pathname === "/api/targets") {
+      if (!store) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, reason: "编辑器未装配（store 缺失）" })); return; }
+      const r = store.read();
+      res.writeHead(r.ok ? 200 : 500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(r));
+      return;
+    }
+    // 编辑器保存：校验 → 备份 → 原子写 → 热替换 + card.update（经 onTargetsSaved 回调到装配层）
+    if (req.method === "PUT" && url.pathname === "/api/targets") {
+      if (!store) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, reason: "编辑器未装配（store 缺失）" })); return; }
+      if (!sameOrigin(req)) { res.writeHead(403, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, reason: "写端点仅接受本机来源" })); return; }
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let parsed;
+        try { parsed = JSON.parse(body); } catch { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, errors: ["JSON 解析失败"] })); return; }
+        const saved = store.save(parsed);
+        if (!saved.ok) { res.writeHead(422, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, errors: saved.errors ?? [saved.reason] })); return; }
+        audit?.({ lane: "local", target: "targets", outcome: "accepted", detail: { via: "editor", count: Object.keys(saved.raw).length, targets: Object.keys(saved.raw) } });
+        onTargetsSaved?.(saved);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, count: Object.keys(saved.raw).length }));
+      });
+      return;
+    }
     // 磁贴面板（PRD-1 F1）：零构建单页，读同一份 targets 注册表
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -97,7 +147,7 @@ export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = 
     }
     // 磁贴数据：targets 全量 + 各 target 最近一次执行（US5 状态点/上次时间）
     if (req.method === "GET" && url.pathname === "/api/tiles") {
-      const tiles = Object.entries(targets)
+      const tiles = Object.entries(getTargets())
         .filter(([, t]) => t.expose !== "none")
         .map(([id, t]) => {
           const last = tasks.lastOf(id);
@@ -137,7 +187,7 @@ export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = 
           for (const p of parts) if (p?.kind === "data" && p.data) Object.assign(vars, p.data);
           const m = text.match(/^(.+?)(?:@(\w+))?$/);
           const skillId = m?.[1]?.trim();
-          if (!skillId || !targets[skillId]) {
+          if (!skillId || !getTargets()[skillId]) {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, error: { code: -32002, message: `unknown target: ${skillId}` } }));
             return;
@@ -256,6 +306,10 @@ export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = 
     server,
     trigger,
     tasks,
+    /** 热替换注册表（editor 保存路径）：磁贴/触发/A2A 查表即时切新定义。 */
+    refreshTargets(next) {
+      currentTargets = next;
+    },
     start() {
       return new Promise((resolve) => server.listen(port, "127.0.0.1", () => resolve(server.address())));
     },

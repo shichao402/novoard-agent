@@ -12,6 +12,7 @@ import { loadTargets, expandSteps, deriveCard } from "./card.mjs";
 import { createAgentRuntime } from "./agent-runtime.mjs";
 import { createTunnelClient } from "./tunnel-client.mjs";
 import { createLocalA2A } from "./local-a2a.mjs";
+import { createTargetsStore } from "./targets-store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -34,12 +35,26 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
   const expanded = expandSteps({ targets: loaded.targets, agentDir: dir });
   if (!expanded.ok) throw new Error(expanded.reason);
   const card = deriveCard({ agentId: config.agentId, targets: loaded.targets });
+  /** editor 保存后 card 热更新（tunnel 上报用新 card；hello 重连也带最新） */
+  const cardRef = { current: card };
 
   const runtime = createAgentRuntime({ targets: expanded.targets, log });
 
+  // target 编辑器后端（M6）：保存 → 从盘重装载 → 热替换 runtime/localA2A 注册表 → card.update 上报 hub
+  const store = createTargetsStore({ agentDir: dir, agentId: config.agentId, log });
+  const onTargetsSaved = (saved) => {
+    runtime.replaceTargets(saved.expanded);
+    localA2A.refreshTargets(saved.expanded);
+    cardRef.current = saved.card;
+    tunnel.replaceTargets?.(saved.expanded);
+    tunnel.replaceCard?.(saved.card);
+    const up = tunnel.sendCardUpdate?.(saved.card);
+    log.info?.(`[editor] 热生效：runtime/磁贴/委派查表已切新定义，card.update ${up?.ok ? "已上报 hub" : `未上报（${up?.reason ?? "hub 离线"}）`}`);
+  };
+
   const tunnel = createTunnelClient({
     config,
-    card,
+    card: cardRef.current,
     targets: expanded.targets,
     runner: runtime,
     stateDir: state,
@@ -61,10 +76,12 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
   const localA2A = createLocalA2A({
     port: Number(config.localPort ?? 0),
     targets: expanded.targets,
-    card,
+    card: cardRef.current,
     runtime,
     audit: localAudit,
     log,
+    store,
+    onTargetsSaved,
     triggerHook: (state, skillId, taskId) => {
       if (TERMINAL_STATES_SET.has(state)) tunnel.uplinkTerminal?.(taskId, state, `tile-trigger ${skillId}`);
     },
@@ -80,7 +97,7 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     await localA2A.close();
   }
 
-  return { config, card, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, stop, agentDir: dir };
+  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, onTargetsSaved, stop, agentDir: dir };
 }
 
 const TERMINAL_STATES_SET = new Set(["completed", "failed", "canceled", "rejected"]);

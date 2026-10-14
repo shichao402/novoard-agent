@@ -11,9 +11,17 @@ export function createAgentRuntime({ targets, log = console, concurrency = 1 } =
   /** taskId → { state, runner?, waitTimer?, pending? } */
   const running = new Map();
   let activeCount = 0;
+  /** 当前 targets 注册表（可热替换：editor 保存后 replaceTargets，在途任务不受影响） */
+  let currentTargets = targets;
+
+  /** 热替换 targets（editor 保存路径）：新触发立即用新定义；在途/审批挂起任务沿用旧定义继续跑。 */
+  function replaceTargets(next) {
+    currentTargets = next;
+    return Object.keys(currentTargets ?? {});
+  }
 
   function launch({ taskId, skillId, vars, steps, onTerminal, onProgress }) {
-    const targetDef = targets?.[skillId];
+    const targetDef = currentTargets?.[skillId];
     if (!targetDef) return { ok: false, reason: `unknown target: ${skillId}` };
     if (running.has(taskId)) return { ok: true, reason: "duplicate-taskId" };
 
@@ -65,7 +73,7 @@ export function createAgentRuntime({ targets, log = console, concurrency = 1 } =
   }
 
   function targetVarsOf(skillId) {
-    return targets?.[skillId]?.vars ?? {};
+    return currentTargets?.[skillId]?.vars ?? {};
   }
 
   /** 审批恢复（M4 F3）：input-required → working，继续执行（hub message/resume 到达后调）。 */
@@ -95,6 +103,7 @@ export function createAgentRuntime({ targets, log = console, concurrency = 1 } =
     launch,
     resume,
     cancel,
+    replaceTargets,
     get runningTasks() {
       return [...running.entries()].map(([id, e]) => ({ id, state: e.state }));
     },
