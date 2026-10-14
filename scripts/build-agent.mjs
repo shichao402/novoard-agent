@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BUILD = join(ROOT, "build");
 const DIST = join(BUILD, "dist");
-const SCHEMA_DIR = join(ROOT, "docs", "architecture", "schemas");
+const SCHEMA_DIR = join(ROOT, "src", "contract", "schemas");
 
 const args = process.argv.slice(2);
 function argOf(name) {
