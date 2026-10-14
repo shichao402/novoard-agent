@@ -37,6 +37,7 @@ export function createAgentRuntime({ targets, log = console, concurrency = 1 } =
           startExecution({ taskId, skillId, vars, steps, onTerminal, onProgress });
         }
       }, 500);
+      waitTimer.unref?.();
       running.set(taskId, { state: "queued", waitTimer });
       return { ok: true, reason: "queued" };
     }

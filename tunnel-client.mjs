@@ -109,7 +109,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
         registered = false;
         if (stopped) return;
         // 断线重连：在途任务继续跑，终态帧在缓存里等重连重放（契约 §4.4 第 1-2 条）
-        setTimeout(connectOnce, backoff());
+        setTimeout(connectOnce, backoff()).unref?.(); // unref：测试/CLI 进程不被无限重连挡住退出
       });
       ws.on("error", (error) => {
         log.error?.(`隧道连接错误：${error.message}`);
@@ -235,6 +235,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
   const pingTimer = setInterval(() => {
     if (connected) ops({ type: "agent.ping", ts: new Date().toISOString() });
   }, PING_INTERVAL_MS);
+  pingTimer.unref?.(); // 不挡测试/CLI 进程退出（close() 时 clearInterval）
 
   function close() {
     stopped = true;
@@ -242,5 +243,27 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
     ws?.close();
   }
 
-  return { start, uplink, uploadArtifact, ops, close, get connected() { return connected; }, get registered() { return registered; } };
+  /** 本地磁贴触发的终态上行（ADR-0008：hub 在线时本地与全局状态同步；taskId 以 local- 前缀区分子序列） */
+  function uplinkTerminal(taskId, state, message) {
+    if (!TERMINAL_OK.has(state)) return;
+    uplink(taskId, {
+      jsonrpc: "2.0",
+      method: "message/notification",
+      params: {
+        message: {
+          messageId: `msg-${randomUUID().slice(0, 8)}`,
+          role: "agent",
+          parts: [],
+          contextId: taskId,
+          taskId,
+          kind: "status-update",
+          status: { state, message: message ?? "", timestamp: new Date().toISOString() },
+        },
+      },
+    });
+  }
+
+  return { start, uplink, uplinkTerminal, uploadArtifact, ops, close, get connected() { return connected; }, get registered() { return registered; } };
 }
+
+const TERMINAL_OK = new Set(["completed", "failed", "canceled"]);

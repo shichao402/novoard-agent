@@ -11,6 +11,7 @@ import { loadAgentConfig } from "./config.mjs";
 import { loadTargets, expandSteps, deriveCard } from "./card.mjs";
 import { createAgentRuntime } from "./agent-runtime.mjs";
 import { createTunnelClient } from "./tunnel-client.mjs";
+import { createLocalA2A } from "./local-a2a.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -55,10 +56,34 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     } });
   };
 
+  // 本地 A2A 端点 + 磁贴面板（ADR-0008；PRD-1 触发路径统一：磁贴/热键/CLI → localhost 端点）
+  // hub 在线时终态经隧道上行（triggerHook）；离线时本地闭环（PRD-1 AC2）
+  const localA2A = createLocalA2A({
+    port: Number(config.localPort ?? 0),
+    targets: expanded.targets,
+    card,
+    runtime,
+    audit: localAudit,
+    log,
+    triggerHook: (state, skillId, taskId) => {
+      if (TERMINAL_STATES_SET.has(state)) tunnel.uplinkTerminal?.(taskId, state, `tile-trigger ${skillId}`);
+    },
+  });
+  const localAddr = await localA2A.start();
+  log.info?.(`[local-a2a] localhost 端点: http://127.0.0.1:${localAddr.port} （磁贴面板 + 触发入口）`);
+
   await tunnel.start();
 
-  return { config, card, targets: expanded.targets, runtime, tunnel, localAudit, agentDir: dir };
+  /** 统一停机：关隧道 + localhost 端点（测试与优雅退出共用）。 */
+  async function stop() {
+    tunnel.close();
+    await localA2A.close();
+  }
+
+  return { config, card, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, stop, agentDir: dir };
 }
+
+const TERMINAL_STATES_SET = new Set(["completed", "failed", "canceled", "rejected"]);
 
 export function main() {
   createLiteAgent()
@@ -66,6 +91,7 @@ export function main() {
       console.log(`Novoard lite-agent 已启动：${agent.config.agentId}`);
       console.log(`  skills: ${agent.card.skills.map((s) => s.id).join(", ") || "无"}`);
       console.log(`  hub: ${agent.config.hubUrl}  state: .agent-state/`);
+      console.log(`  local: http://127.0.0.1:${agent.localA2A.server.address().port} （磁贴面板）`);
     })
     .catch((error) => {
       console.error(`lite-agent 启动失败：${error.message}`);

@@ -25,10 +25,11 @@ export function loadAgentConfig({ configPath, env = process.env } = {}) {
   const hubUrl = String(data.hubUrl ?? env.NOVOARD_HUB_URL ?? "").trim();
   const agentToken = String(data.agentToken ?? env.NOVOARD_AGENT_TOKEN ?? "").trim();
   const contractVersion = String(data.contractVersion ?? env.NOVOARD_CONTRACT_VERSION ?? "1.0").trim();
+  const localPort = Number(data.localPort ?? env.NOVOARD_LOCAL_PORT ?? 0) || 0;
   const fields = { agentId, hubUrl, agentToken, contractVersion };
   const missing = Object.entries(fields).filter(([, v]) => !v).map(([k]) => k);
   if (missing.length) {
     return { ok: false, reason: `缺少字段：${missing.join(", ")}`, file };
   }
-  return { ok: true, version: contractVersion, ...fields, file };
+  return { ok: true, version: contractVersion, ...fields, localPort, file };
 }
