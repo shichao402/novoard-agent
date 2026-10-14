@@ -1,0 +1,15 @@
+# 内置 stepTemplate：open-instance（PRD-1 F5 / US6）
+# 场景：不重新部署，仅"打开固定实例体验"——健康检查 + 浏览器/应用拉起。
+# 与 deploy-webapp 的最后一步同型，但独立成模板：很多 target 只需要"开"，不需要"部署"。
+# vars（无默认值者必填）：
+#   url:           打开的 URL（如 http://localhost:5173），浏览器打开
+#   healthTimeout: 健康检查超时秒数，默认 10
+# 拉起桌面应用（open -a）不进本模板：openApp/openPath 本就是一等 step（F4），
+# 引用方需要 app 形态时直接在 target steps 里写 openApp，不走模板。
+
+vars:
+  healthTimeout: "10"
+
+steps:
+  - script: curl -fsS --max-time {{healthTimeout}} "{{url}}" >/dev/null && echo instance-alive
+  - openApp: "{{url}}"

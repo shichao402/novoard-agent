@@ -1,0 +1,27 @@
+{
+  "name": "novoard-agent",
+  "version": "0.1.0",
+  "description": "Novoard 联邦执行 agent：跨平台面板 + target 编辑器 + runner + setup 向导，接入任意 Novoard hub",
+  "type": "module",
+  "bin": {
+    "novoard-agent": "src/sea-entry.mjs"
+  },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "build": "node scripts/build-agent.mjs",
+    "contract-gate": "node scripts/check-contract-copy.mjs",
+    "test": "npm run contract-gate && node --test \"test/*.mjs\""
+  },
+  "dependencies": {
+    "ajv": "^8.17.0",
+    "ws": "^8.18.0",
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

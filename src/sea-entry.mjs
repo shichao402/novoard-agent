@@ -13,7 +13,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { EMBEDDED_SCHEMAS } from "../../build/embedded-schemas.gen.mjs";
+import { EMBEDDED_SCHEMAS } from "../build/embedded-schemas.gen.mjs";
 import { loadAgentConfig } from "./config.mjs";
 import { createLiteAgent } from "./main.mjs";
 import { createSetupWizard } from "./setup-wizard.mjs";

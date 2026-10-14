@@ -22,7 +22,7 @@ function schemaDirFromModuleUrl() {
     const here = dirname(fileURLToPath(import.meta.url));
     return join(here, "schemas");
   } catch {
-    return join(process.cwd(), "src", "lite-agent", "contract", "schemas");
+    return join(process.cwd(), "src", "contract", "schemas");
   }
 }
 

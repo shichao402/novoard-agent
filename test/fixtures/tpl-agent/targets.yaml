@@ -1,0 +1,11 @@
+# fixture：模板机制结构性验证（舰队真实定义在 hub 仓 agents/）
+targets:
+  open-demo:
+    title: 打开演示应用
+    template: open-instance
+    vars:
+      url: http://localhost:5173
+    expose: a2a
+    audit: summary
+    requiresApproval: false
+    notify: on-failure

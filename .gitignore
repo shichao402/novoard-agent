@@ -1,0 +1,10 @@
+# 本地运行态（不进 git）
+node_modules/
+build/
+dist/
+*.local.json
+.state/
+.agent-state/
+agents/
+agent.json
+.DS_Store
