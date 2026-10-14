@@ -155,11 +155,18 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
     }
   }
 
-  /** 委派处理：message/send 解析 target → runner.launch；tasks/cancel → runner.cancel。 */
+  /** 委派处理：message/send 解析 target → runner.launch；tasks/cancel → runner.cancel；message/resume → runner.resume。 */
   function handleDelegate(env) {
     const body = env.body;
     if (body?.method === "tasks/cancel") {
       runner.cancel(env.taskId);
+      return;
+    }
+    if (body?.method === "message/resume") {
+      const r = runner.resume?.(env.taskId);
+      if (!r?.ok) {
+        uplink(env.taskId, statusNotification(env.taskId, "failed", `恢复失败：${r?.reason ?? "not-suspended"}`));
+      }
       return;
     }
     if (body?.method !== "message/send") return;
@@ -183,6 +190,10 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
       steps: runCfg.expanded,
       onTerminal: (state, detail) => {
         uplink(env.taskId, statusNotification(env.taskId, state, detail));
+      },
+      onProgress: (i, n, d) => {
+        // M4 F2 步骤级进度上行（非终态 status-update，hub SSE 透传给委派方）
+        uplink(env.taskId, statusNotification(env.taskId, "working", `step ${i}/${n}：${d}`));
       },
     });
   }
