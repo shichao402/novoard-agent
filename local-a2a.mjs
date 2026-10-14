@@ -28,25 +28,25 @@ function createLocalTasks() {
   };
 }
 
+/** 写端点同源校验（localhost HTTP 服务标准加固，setup 向导复用导出）：Host 必须本机回环；带 Origin 时必须同源。
+ *  挡跨站表单 POST（浏览器不给跨域 PUT 发简单请求预检外的都带 Origin）与 DNS rebinding。 */
+export function sameOrigin(req) {
+  let host = String(req.headers.host ?? "");
+  if (host.startsWith("[")) host = host.slice(0, host.indexOf("]") + 1); // [::1] / [::1]:port
+  else host = host.split(":")[0];
+  if (!["127.0.0.1", "localhost", "[::1]"].includes(host)) return false;
+  const origin = req.headers.origin;
+  if (origin) {
+    try { if (new URL(origin).hostname !== host.replace(/^\[|\]$/g, "")) return false; } catch { return false; }
+  }
+  return true;
+}
+
 export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved } = {}) {
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
   let currentTargets = targets;
   const getTargets = () => currentTargets ?? {};
-
-  /** 写端点同源校验（localhost HTTP 服务标准加固）：Host 必须本机回环；带 Origin 时必须同源。
-   *  挡跨站表单 POST（浏览器不给跨域 PUT 发简单请求预检外的都带 Origin）与 DNS rebinding。 */
-  function sameOrigin(req) {
-    let host = String(req.headers.host ?? "");
-    if (host.startsWith("[")) host = host.slice(0, host.indexOf("]") + 1); // [::1] / [::1]:port
-    else host = host.split(":")[0];
-    if (!["127.0.0.1", "localhost", "[::1]"].includes(host)) return false;
-    const origin = req.headers.origin;
-    if (origin) {
-      try { if (new URL(origin).hostname !== host.replace(/^\[|\]$/g, "")) return false; } catch { return false; }
-    }
-    return true;
-  }
 
   /** 触发本地执行：生成 taskId → runtime.launch → 状态落本地表。 */
   function trigger({ skillId, vars = {} }) {

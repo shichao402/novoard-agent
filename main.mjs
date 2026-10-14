@@ -6,7 +6,7 @@
  */
 import { mkdirSync, appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadAgentConfig } from "./config.mjs";
 import { loadTargets, expandSteps, deriveCard } from "./card.mjs";
 import { createAgentRuntime } from "./agent-runtime.mjs";
@@ -14,13 +14,23 @@ import { createTunnelClient } from "./tunnel-client.mjs";
 import { createLocalA2A } from "./local-a2a.mjs";
 import { createTargetsStore } from "./targets-store.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = moduleHere();
+
+/** 模块定位（dev=src/lite-agent/；SEA/打包形态 import.meta 不可用时为 null，此时由 sea-entry 显式传 agentDir）。 */
+function moduleHere() {
+  try {
+    return dirname(fileURLToPath(import.meta.url));
+  } catch {
+    return null;
+  }
+}
 
 export async function createLiteAgent({ configPath, agentDir, stateDir, log = console, env = process.env } = {}) {
   const config = loadAgentConfig({ configPath, env });
   if (!config.ok) throw new Error(config.reason);
 
-  const dir = agentDir ?? join(HERE, "..", "..", "agents", config.agentId);
+  const dir = agentDir ?? (HERE ? join(HERE, "..", "..", "agents", config.agentId) : null);
+  if (!dir) throw new Error("SEA/打包形态必须显式传 agentDir（sea-entry 以 cwd 锚定传入）");
   const state = stateDir ?? join(process.cwd(), ".agent-state");
   mkdirSync(state, { recursive: true });
   const auditFile = join(state, "audit.jsonl");
@@ -116,6 +126,7 @@ export function main() {
     });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// SEA/CJS bundle 形态 import.meta.url 为空——恒不触发（sea-entry 显式装配）；dev 直接运行时正常判断
+if (import.meta?.url && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }
