@@ -1,21 +1,23 @@
 /**
  * 契约级 mock hub（agent 仓测试独立性的关键件）：
- * 只实现 agent 测试需要的隧道行为面——hello 注册（token 校验）、card 聚合、
- * 委派下发（ops frame）、终态上行（ack）、ping/pong、agent 重连重放。
+ * 只实现 agent 测试需要的行为面——Bearer 身份绑定、hello 注册、artifact 归属、
+ * card 聚合、委派下发、终态上行（ack）、ping/pong、agent 重连重放。
  * 行为对齐 hub 仓 attachTunnel + registry（契约 §3 §4 §8）。
  * 契约漂移防线：mock 与 agent 同仓构建（contract/frames 校验帧合法性），
  * 真实 hub 兼容性由 hub 仓自己的 e2e 保障。
  */
 import { WebSocketServer } from "ws";
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { createFrameValidator } from "../../src/contract/frames.mjs";
 
-export async function createMockHub({ port = 0, tokens = [], log = { info() {}, error() {} } } = {}) {
+export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, error() {} } } = {}) {
   const validate = createFrameValidator();
   const members = new Map(); // agentId -> { ws, card, lastSeen }
   const tasks = new Map(); // taskId -> { state, target, member, events: [] }
   const frames = []; // 收到的全部 ops 帧（测试断言用）
-  const tokenSet = new Set(tokens);
+  const tokenToAgent = new Map(Object.entries(tokens).map(([agentId, token]) => [String(token), agentId]));
+  const artifacts = [];
   const pendingOffline = []; // hello 后需补下发的任务（模拟 M2 flush）
 
   /** 委派对齐契约：a2a 信封（taskId 信封层）+ body message/send + run 文本（agent handleDelegate 同款解析） */
@@ -38,6 +40,43 @@ export async function createMockHub({ port = 0, tokens = [], log = { info() {}, 
 
   const httpServer = createServer((req, res) => {
     const url = new URL(req.url, "http://x");
+    if (req.method === "POST" && url.pathname === "/api/artifacts") {
+      const token = String(req.headers.authorization ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
+      const agentId = tokenToAgent.get(token);
+      if (!agentId) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "agent token required" }));
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const payload = JSON.parse(body || "{}");
+        const task = tasks.get(payload.taskId);
+        if (!task || task.member !== agentId) {
+          res.writeHead(404, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "task not found" }));
+          return;
+        }
+        const content = Buffer.from(String(payload.content ?? ""), "base64");
+        const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+        if (payload.encoding !== "base64" || payload.digest !== digest) {
+          res.writeHead(422, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "digest-mismatch" }));
+          return;
+        }
+        artifacts.push({ ...payload, member: agentId, target: task.target });
+        res.writeHead(201, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          artifact: {
+            name: payload.name,
+            parts: [{ kind: "file", uri: `/api/artifacts/art_mock_${artifacts.length}` }],
+            metadata: { taskId: payload.taskId, member: agentId, target: task.target, digest: payload.digest },
+          },
+        }));
+      });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/trigger" || req.method === "POST" && url.pathname === "/api/trigger") {
       // 简化触发：body { target } → 委派给 owner → 状态机 working → 终态由 agent ack 驱动
       let body = "";
@@ -92,17 +131,18 @@ export async function createMockHub({ port = 0, tokens = [], log = { info() {}, 
     const header = req.headers.authorization ?? "";
     const match = header.match(/^Bearer\s+(.+)$/i);
     const token = match?.[1] ?? url.searchParams.get("token") ?? "";
-    if (tokenSet.size > 0 && !tokenSet.has(token)) {
+    const authenticatedAgentId = tokenToAgent.get(token);
+    if (!authenticatedAgentId) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
     }
+    req.authenticatedAgentId = authenticatedAgentId;
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   });
 
   wss.on("connection", (ws, req) => {
-    const url = new URL(req.url, "http://x");
-    const token = url.searchParams.get("token") ?? "";
+    const authenticatedAgentId = req.authenticatedAgentId;
     let memberId = null;
     ws.on("message", (raw) => {
       let frame;
@@ -131,6 +171,10 @@ export async function createMockHub({ port = 0, tokens = [], log = { info() {}, 
         const hello = frame.body;
         if (!validate.opsBody("agent.hello", hello).ok) {
           ws.close(4002, "hello-invalid");
+          return;
+        }
+        if (hello.agentId !== authenticatedAgentId) {
+          sendOps(ws, { type: "agent.hello.nack", reason: "agent-identity-mismatch", hubVersion: "2.0" });
           return;
         }
         memberId = hello.agentId;
@@ -177,6 +221,7 @@ export async function createMockHub({ port = 0, tokens = [], log = { info() {}, 
     get members() { return members; },
     get tasks() { return tasks; },
     get frames() { return frames; },
+    get artifacts() { return artifacts; },
     /** 手动委派（契约形态 a2a message/send，绕过 HTTP） */
     delegateTo(agentId, { taskId, target, vars }) {
       const m = members.get(agentId);

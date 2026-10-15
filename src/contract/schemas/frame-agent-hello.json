@@ -3,12 +3,11 @@
   "$id": "novoard/frame-agent-hello.json",
   "title": "ops 帧 agent.hello（注册 / 重连）",
   "type": "object",
-  "required": ["type", "contractVersion", "agentId", "token", "card"],
+  "required": ["type", "contractVersion", "agentId", "card"],
   "properties": {
     "type": { "const": "agent.hello" },
     "contractVersion": { "type": "string", "pattern": "^\\d+\\.\\d+$" },
     "agentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-    "token": { "type": "string", "minLength": 8 },
     "card": { "$ref": "agent-card.json" },
     "inFlightTaskIds": {
       "type": "array",

@@ -251,10 +251,10 @@ test("M6 e2e：编辑保存 → card.update → hub 聚合 card / catalog 即时
   let agent = null;
   let hub = null;
   try {
-    hub = await createMockHub({ tokens: [AGENT_TOKEN] });
+    hub = await createMockHub({ tokens: { "mac-home": AGENT_TOKEN } });
     const port = hub.server.address().port;
     const configPath = join(agentState, "agent.json");
-    wfs(configPath, JSON.stringify({ agentId: "mac-home", hubUrl: `ws://127.0.0.1:${port}/tunnel`, agentToken: AGENT_TOKEN, contractVersion: "1.0" }));
+    wfs(configPath, JSON.stringify({ agentId: "mac-home", hubUrl: `ws://127.0.0.1:${port}/tunnel`, agentToken: AGENT_TOKEN, contractVersion: "2.0" }));
 
     agent = await createLiteAgent({ configPath, agentDir, stateDir: join(agentState, "astate"), log: {} });
     await new Promise((r) => setTimeout(r, 300));
