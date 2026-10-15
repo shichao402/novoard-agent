@@ -28,12 +28,12 @@ test("release tag 同步 npm、Tauri 与 Rust 产品版本", (t) => {
   });
   writeFileSync(
     join(root, "desktop", "src-tauri", "Cargo.toml"),
-    `[package]\nname = "novoard-agent-desktop"\nversion = "0.1.0"\n`,
+    `[package]\r\nname = "novoard-agent-desktop"\r\nversion = "0.1.0"\r\n`,
     "utf8",
   );
   writeFileSync(
     join(root, "desktop", "src-tauri", "Cargo.lock"),
-    `version = 4\n\n[[package]]\nname = "novoard-agent-desktop"\nversion = "0.1.0"\n`,
+    `version = 4\r\n\r\n[[package]]\r\nname = "novoard-agent-desktop"\r\nversion = "0.1.0"\r\n`,
     "utf8",
   );
 

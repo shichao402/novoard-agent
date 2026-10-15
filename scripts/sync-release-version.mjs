@@ -56,13 +56,13 @@ function writeJson(path, value) {
 }
 
 function replaceCargoManifestVersion(text, version) {
-  const pattern = /(\[package\][\s\S]*?\nversion = ")[^"]+(")/;
+  const pattern = /(\[package\][\s\S]*?\r?\nversion = ")[^"]+(")/;
   if (!pattern.test(text)) throw new Error("Cargo.toml 缺少 [package] version");
   return text.replace(pattern, `$1${version}$2`);
 }
 
 function replaceCargoLockVersion(text, version) {
-  const pattern = /(\[\[package\]\]\nname = "novoard-agent-desktop"\nversion = ")[^"]+(")/;
+  const pattern = /(\[\[package\]\]\r?\nname = "novoard-agent-desktop"\r?\nversion = ")[^"]+(")/;
   if (!pattern.test(text)) throw new Error("Cargo.lock 缺少 novoard-agent-desktop package");
   return text.replace(pattern, `$1${version}$2`);
 }

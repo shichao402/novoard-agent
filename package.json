@@ -1,6 +1,6 @@
 {
   "name": "novoard-agent",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Novoard 联邦执行 agent：Windows/macOS 托盘桌面壳 + Linux 无头服务，接入任意 Novoard hub",
   "type": "module",
   "bin": {
