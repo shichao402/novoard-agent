@@ -21,7 +21,7 @@ Windows/macOS 的桌面部分是独立 Tauri 轻壳：它只启动和监管内�
 - 桌面数据目录：Windows `%APPDATA%/com.novoard.agent/`，macOS `~/Library/Application Support/com.novoard.agent/`。卸载应用不会主动删除身份与 target。
 - Linux 数据目录：仍为启动时工作目录，包含 `agent.json`、`agents/` 和 `.agent-state/`。
 - 平台差异收敛在源码内：script 步骤在 Windows 走 `cmd.exe`，openApp/openPath 走 `start`；macOS/Linux 使用各自系统命令。
-- 契约锁定拷贝：`src/contract/` 内含九张 schema 与 frames 校验器；当前锁定 v2.0，SSOT 位于 Hub 仓，升级时拷贝并同步 `CONTRACT_VERSION`。
+- 契约锁定拷贝：`src/contract/` 内含九张 schema 与 frames 校验器；当前锁定 v2.0，SSOT 位于 Hub 仓。CI 会检出工作流中固定 commit 的 Hub SSOT，逐字比较 schema，并对 frames 做排除路径锚差异后的语义比较；升级时必须同时更新拷贝、`CONTRACT_VERSION` 与固定 commit。
 
 ## Windows / macOS 使用
 
@@ -76,7 +76,7 @@ SEA 注入要求官方 Node 发行二进制；Homebrew 源码构建缺少 SEA fu
 - macOS arm64 / x64：ad-hoc DMG；
 - Linux x64：无头 SEA zip。
 
-测试中的 mock Hub（`test/lib/mock-hub.mjs`）覆盖 Bearer token 与 `agentId` 绑定、无 token hello、A2A 委派、终态上行、card.update，以及带 taskId/base64/sha256 的 artifact 上传与跨 member 拒绝；Agent 测试不依赖 Hub 仓代码，跨端真 Hub e2e 仍由 Hub 仓负责。
+测试中的 mock Hub（`test/lib/mock-hub.mjs`）覆盖 Bearer token 与 `agentId` 绑定、无 token hello、A2A 委派、终态上行、card.update，以及带 taskId/base64/sha256 的 artifact 上传与跨 member 拒绝；运行时测试不依赖 Hub 实现，但 CI 契约门禁会只读检出固定 Hub revision 做锁定拷贝对比，跨端真 Hub e2e 仍由 Hub 仓负责。
 
 ## 仓库关系
 

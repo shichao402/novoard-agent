@@ -13,12 +13,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout pinned Hub contract SSOT
+        uses: actions/checkout@v4
+        with:
+          repository: shichao402/Novoard
+          ref: 62047a64fa0b41336e88c798207d0c37e77e74ad
+          path: .contract-ssot
+          sparse-checkout: |
+            docs/architecture/contracts.md
+            docs/architecture/schemas
+            src/frames.mjs
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm test
+        env:
+          NOVOARD_HUB_ROOT: .contract-ssot
       - name: Build Linux SEA
         run: npm run build
         env:

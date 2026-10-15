@@ -124,7 +124,10 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
       ws = new WebSocket(hubUrl, { headers: { Authorization: `Bearer ${agentToken}` } });
       ws.on("open", () => {
         connected = true;
-        const inFlightTaskIds = [...new Set([...pending.values()].map((e) => e.taskId))];
+        const inFlightTaskIds = [...new Set([
+          ...[...pending.values()].map((envelope) => envelope.taskId),
+          ...(runner.runningTasks ?? []).map((task) => task.id),
+        ].filter(Boolean))];
         ops({
           type: "agent.hello",
           contractVersion,

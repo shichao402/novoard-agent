@@ -1,6 +1,6 @@
 [package]
 name = "novoard-agent-desktop"
-version = "0.3.1"
+version = "0.3.2"
 description = "Novoard Agent desktop tray host"
 authors = ["Novoard"]
 edition = "2021"

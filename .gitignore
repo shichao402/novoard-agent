@@ -17,4 +17,5 @@ desktop/src-tauri/icons/icon.png
 .agent-state/
 agents/
 agent.json
+.contract-ssot/
 .DS_Store
