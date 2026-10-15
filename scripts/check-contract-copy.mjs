@@ -8,7 +8,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -35,7 +35,7 @@ if (!existsSync(join(ROOT, "src", "contract", "frames.mjs"))) {
 // 行为自检：加载校验器，合法帧过、非法帧拒（与浏览器同口径的正反向样例）
 if (fail === 0) {
   const require = createRequire(import.meta.url);
-  const { createFrameValidator } = await import(join(ROOT, "src", "contract", "frames.mjs"));
+  const { createFrameValidator } = await import(pathToFileURL(join(ROOT, "src", "contract", "frames.mjs")).href);
   const validate = createFrameValidator();
   const good = { v: 1, kind: "ops", msgId: "e-gate-1", ts: new Date().toISOString(), body: { type: "agent.ping", ts: new Date().toISOString() } };
   const bad = { v: 1, kind: "ops", msgId: "e-gate-2", ts: new Date().toISOString(), body: { type: "agent.ping", agentId: "" } };
