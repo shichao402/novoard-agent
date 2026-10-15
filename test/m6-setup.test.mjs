@@ -35,7 +35,7 @@ test("M6F2 testConnection：真 hub 探测——错 token 401，正确 token ope
   const hubDir = mkdtempSync(join(tmpdir(), "novoard-f2hub-"));
   let hub = null;
   try {
-    hub = await createMockHub({ tokens: ["agt-f2-test-conn-123456"] });
+    hub = await createMockHub({ tokens: { probe: "agt-f2-test-conn-123456" } });
     const port = hub.server.address().port;
 
     const bad = await testConnection({ hubUrl: `ws://127.0.0.1:${port}/tunnel`, agentToken: "agt-wrong-token-000000" });
@@ -138,7 +138,7 @@ test("M6F2 e2e：向导保存 → agent 热启动 → hub 注册 → editor 改 
   let hub = null;
   let agent = null;
   try {
-    hub = await createMockHub({ tokens: [AGENT_TOKEN] });
+    hub = await createMockHub({ tokens: { "win-dev": AGENT_TOKEN } });
     const port = hub.server.address().port;
 
     let bootedAgent = null;
@@ -210,7 +210,7 @@ test("M6F2 schemas 内嵌等价：注入 globalThis 后 createFrameValidator 校
   assert.equal(embeddedValidator.targets(badTarget).ok, false);
   assert.deepEqual(diskValidator.targets(badTarget).errors.map((e) => e.instancePath), embeddedValidator.targets(badTarget).errors.map((e) => e.instancePath));
 
-  const hello = { type: "agent.hello", contractVersion: "1.0", agentId: "win-dev", token: "0123456789", card: { name: "win-dev", description: "d", version: "1.0.0", capabilities: { streaming: false, pushNotifications: true }, defaultInputModes: ["text"], defaultOutputModes: ["text"], skills: [] } };
+  const hello = { type: "agent.hello", contractVersion: "2.0", agentId: "win-dev", card: { name: "win-dev", description: "d", version: "2.0.0", capabilities: { streaming: false, pushNotifications: true }, defaultInputModes: ["text"], defaultOutputModes: ["text"], skills: [] } };
   assert.equal(diskValidator.opsBody("agent.hello", hello).ok, true);
   assert.equal(embeddedValidator.opsBody("agent.hello", hello).ok, true);
 });

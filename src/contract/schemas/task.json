@@ -31,6 +31,18 @@
         "properties": {
           "name": { "type": "string" },
           "description": { "type": "string" },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "artifactId": { "type": "string", "pattern": "^art_[a-f0-9]{32}$" },
+              "taskId": { "type": "string", "pattern": "^task-" },
+              "member": { "type": "string" },
+              "target": { "type": "string" },
+              "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+              "size": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          },
           "parts": {
             "type": "array",
             "items": {

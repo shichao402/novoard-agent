@@ -3,11 +3,11 @@
  * 出站 wss + Bearer agentToken；hello 注册（card、contractVersion、inFlightTaskIds）；
  * 断线不影响在途任务，未确认上行帧本地 JSONL 缓存，重连后重放（同 msgId，hub 侧幂等去重，契约 §4.4）。
  * 下行 a2a 帧：message/send → runner 执行 → 上行 status-update 终态；tasks/cancel → runner.cancel()。
- * artifact（契约 §7）：产出文件走 POST /api/artifacts（agent token 鉴权，5MB 上限）。
+ * artifact（契约 2.0 §7）：上传携带 taskId + sha256，hub 校验 token 身份与任务 member 归属。
  * ops 心跳：agent.ping 定时（hub 侧 PING_TIMEOUT 60s，客户端 25s 间隔）。
  */
 import WebSocket from "ws";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 
@@ -15,10 +15,12 @@ const PING_INTERVAL_MS = 25_000;
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 30_000;
 
-export function createTunnelClient({ config, card, targets, runner, stateDir, log = console, fetchImpl = fetch } = {}) {
+export function createTunnelClient({ config, card, targets, runner, stateDir, log = console, fetchImpl = fetch, onFatal } = {}) {
   if (!config?.ok) throw new Error(`lite-agent 配置无效：${config?.reason}`);
   const { agentId, hubUrl, agentToken, contractVersion } = config;
-  const hubHttp = hubUrl.replace(/^ws/, "http");
+  const hubHttpUrl = new URL(hubUrl);
+  hubHttpUrl.protocol = hubHttpUrl.protocol === "wss:" ? "https:" : "http:";
+  const hubHttp = hubHttpUrl.origin;
   const stateDirResolved = stateDir ?? join(process.cwd(), ".agent-state");
   const replayFile = join(stateDirResolved, "replay.jsonl");
   /** taskId → 未确认上行帧（msgId 不变，重放去重靠 hub） */
@@ -83,12 +85,23 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
   }
 
   async function uploadArtifact(taskId, { name, filePath, content }) {
-    const data = content ?? (filePath ? readFileSync(filePath, "utf8") : "");
+    if (!/^task-[a-zA-Z0-9-]+$/.test(String(taskId))) throw new Error("artifact taskId 无效");
+    const data = content === undefined
+      ? (filePath ? readFileSync(filePath) : null)
+      : Buffer.isBuffer(content) ? content : Buffer.from(String(content));
     if (!data) throw new Error("artifact 无内容");
+    if (data.length > 5 * 1024 * 1024) throw new Error("artifact 超过 5MB 上限");
+    const digest = `sha256:${createHash("sha256").update(data).digest("hex")}`;
     const res = await fetchImpl(`${hubHttp}/api/artifacts`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${agentToken}` },
-      body: JSON.stringify({ name, data: String(data) }),
+      body: JSON.stringify({
+        taskId,
+        name,
+        content: data.toString("base64"),
+        encoding: "base64",
+        digest,
+      }),
     });
     if (!res.ok) throw new Error(`artifact 上传失败：${res.status}`);
     return res.json();
@@ -116,7 +129,6 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
           type: "agent.hello",
           contractVersion,
           agentId,
-          token: agentToken,
           card: getCard(),
           inFlightTaskIds,
         });
@@ -150,8 +162,18 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
     if (frame.kind === "ops") {
       const body = frame.body ?? {};
       if (body.type === "agent.hello.nack") {
-        log.error?.(`hello 被拒：${body.reason}（hubVersion ${body.hubVersion ?? "?"}）——检查 contractVersion 与 skill 冲突`);
-        process.exit(1);
+        const message = `hello 被拒：${body.reason}（hubVersion ${body.hubVersion ?? "?"}）——检查 contractVersion、Agent Token 与 agentId`;
+        log.error?.(message);
+        stopped = true;
+        try { ws?.close(); } catch {}
+        if (onFatal) {
+          Promise.resolve(onFatal({ code: "hello-nack", message, detail: body })).catch((error) => {
+            log.error?.(`fatal 回调失败：${error?.message ?? error}`);
+          });
+        } else {
+          process.exit(1);
+        }
+        return;
       }
       if (body.type === "agent.hello.ack") {
         registered = true;

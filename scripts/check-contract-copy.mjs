@@ -4,7 +4,7 @@
  * 本仓 src/contract/ 是锁定拷贝本体（升级 = 从 hub 仓拷贝后提交，版本记录在 CONTRACT_VERSION）。
  * 本门禁只校验拷贝自身完整可用：九张 schema 齐全 + frames 可加载 + 校验样例帧行为正确。
  * 跨仓漂移防线：hub 仓 CI 的 check-contract-copy.mjs 对称校验其内建拷贝；
- * 两仓通过 CONTRACT_VERSION（下方常量 + package.json description 注记）对齐版本。
+ * 两仓通过 CONTRACT_VERSION（下方常量）对齐版本，README 展示当前锁定版本。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -15,7 +15,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCHEMA_DIR = join(ROOT, "src", "contract", "schemas");
 
 /** 锁定拷贝的契约版本（来源 hub 仓 contracts.md SSOT；升级时同步改这里） */
-export const CONTRACT_VERSION = "v1.1";
+export const CONTRACT_VERSION = "v2.0";
 
 const SCHEMA_FILES = ["a2a-envelope.json", "frame-agent-hello.json", "frame-agent-ping.json", "frame-telemetry.json", "frame-card-update.json", "agent-card.json", "task.json", "audit-event.json", "target.json"];
 
@@ -40,12 +40,31 @@ if (fail === 0) {
   const good = { v: 1, kind: "ops", msgId: "e-gate-1", ts: new Date().toISOString(), body: { type: "agent.ping", ts: new Date().toISOString() } };
   const bad = { v: 1, kind: "ops", msgId: "e-gate-2", ts: new Date().toISOString(), body: { type: "agent.ping", agentId: "" } };
   const badEnvelope = { v: 1, kind: "ops", msgId: "e-gate-3", body: { type: "agent.ping", ts: new Date().toISOString() } };
+  const hello = {
+    type: "agent.hello",
+    contractVersion: "2.0",
+    agentId: "gate-agent",
+    card: {
+      name: "gate",
+      description: "gate",
+      version: "2.0.0",
+      capabilities: { streaming: false, pushNotifications: true },
+      defaultInputModes: ["text"],
+      defaultOutputModes: ["text"],
+      skills: [],
+    },
+    inFlightTaskIds: [],
+  };
   if (!validate.envelope(good).ok || !validate.opsBody("agent.ping", good.body).ok) {
     console.error("✗ 合法样例帧被拒：校验器行为异常");
     fail++;
   }
   if (validate.opsBody("agent.ping", bad.body).ok || validate.envelope(badEnvelope).ok) {
     console.error("✗ 非法样例帧被放行：校验器行为异常");
+    fail++;
+  }
+  if (!validate.opsBody("agent.hello", hello).ok || validate.opsBody("agent.hello", { ...hello, token: "legacy-token" }).ok) {
+    console.error("✗ 契约 2.0 hello 身份字段行为异常");
     fail++;
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "novoard-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Novoard 联邦执行 agent：跨平台面板 + target 编辑器 + runner + setup 向导，接入任意 Novoard hub",
   "type": "module",
   "bin": {

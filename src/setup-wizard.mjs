@@ -106,7 +106,7 @@ export function createSetupWizard({ dir, port = SETUP_PORT_DEFAULT, onReady, log
       writeFileSync(targetsPath, skeletonTargets(id), "utf8");
       log.info?.(`[setup] 已生成骨架 targets.yaml：${targetsPath}`);
     }
-    const config = { agentId: id, hubUrl: norm.url, agentToken: token, contractVersion: "1.0", localPort: Number(localPort) || 0 };
+    const config = { agentId: id, hubUrl: norm.url, agentToken: token, contractVersion: "2.0", localPort: Number(localPort) || 0 };
     const configPath = join(dir, "agent.json");
     writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
     try { chmodSync(configPath, 0o600); } catch { /* 平台不支持 chmod 时忽略 */ }
@@ -236,7 +236,7 @@ function setupPage() {
   <div class="field"><label>成员 ID（agentId）</label><input id="agentId" placeholder="win-dev" value="">
     <div class="hint">小写字母/数字/连字符；hub Dashboard 按此展示成员</div></div>
   <div class="field"><label>Agent Token</label><input id="agentToken" type="password" placeholder="向 hub 管理员索取">
-    <div class="hint">hub 侧 agentTokens 预置后生效（管理员提供）</div></div>
+    <div class="hint">在 Hub 成员页创建；token 只绑定上方同一个 agentId</div></div>
   <div class="field"><label>面板端口（可选）</label><input id="localPort" placeholder="39871（留空自动分配）" value=""></div>
   <div class="row">
     <button onclick="testConn()">测试连接</button>

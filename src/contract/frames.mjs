@@ -1,5 +1,5 @@
 /**
- * 信封与帧校验（契约 v1.1 锁定拷贝，来源 docs/architecture/schemas/ + src/frames.mjs）。
+ * 信封与帧校验（契约 v2.0 锁定拷贝，来源 docs/architecture/schemas/ + src/frames.mjs）。
  * 本文件是 agent 侧契约子系统的内建拷贝：hub 仓 docs/ 是 SSOT，拷贝纪律见
  * scripts/check-contract-copy.mjs（CI 门禁：SSOT 变更未同步拷贝即红）。
  * ajv 以 draft 2020-12 入口加载本目录 schemas/ 九张 schema：
