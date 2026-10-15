@@ -1,6 +1,6 @@
 /**
  * SEA（Single Executable Application）打包脚本（M6 F2 二进制分发）：
- *   1. esbuild bundle：src/lite-agent/sea-entry.mjs → CJS 单文件（ws 可选原生依赖 external，运行时自行回退纯 JS）
+ *   1. esbuild bundle：src/sea-entry.mjs → CJS 单文件（ws 可选原生依赖 external，运行时自行回退纯 JS）
  *   2. 生成 build/embedded-schemas.gen.mjs：九张 schema 内嵌（bundle 后 docs/ 不可读）
  *   3. node --experimental-sea-config 产出 blob
  *   4. 复制本机 node 二进制 → postject 注入 blob +signtool 可选
@@ -25,8 +25,8 @@ function argOf(name) {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : undefined;
 }
-const targetPlatform = argOf("platform") ?? process.platform;
-const targetArch = argOf("arch") ?? process.arch;
+const targetPlatform = argOf("platform") ?? process.env.NOVOARD_BUILD_PLATFORM ?? process.platform;
+const targetArch = argOf("arch") ?? process.env.NOVOARD_BUILD_ARCH ?? process.arch;
 
 const SCHEMA_FILES = ["a2a-envelope.json", "frame-agent-hello.json", "frame-agent-ping.json", "frame-telemetry.json", "frame-card-update.json", "agent-card.json", "task.json", "audit-event.json", "target.json"];
 
@@ -121,18 +121,22 @@ async function inject() {
     await postject(exePath, sentinel, blobData, { sentinelFuse: FUSE });
   }
 
-  // 附带发行件
+  // 附带发行件（Windows/macOS 的该二进制会作为 Tauri sidecar；Linux 直接分发）。
+  const usage = targetPlatform === "linux"
+    ? `无头使用：
+- 本目录就是数据目录（agent.json / agents/ / .agent-state/）
+- 未发现 agent.json 时启动 http://127.0.0.1:39870/setup
+- 推荐 SSH 转发访问；测试网络远程开放需同时设置 NOVOARD_UI_HOST=0.0.0.0 与至少 16 字符的 NOVOARD_UI_TOKEN
+`
+    : `本文件是桌面安装包内使用的 Agent service sidecar，面向用户请运行 Novoard Agent 桌面应用。
+如需诊断，可直接执行；工作目录即数据目录。
+`;
   writeFileSync(
     join(outDir, "README.txt"),
     `Novoard agent（${targetPlatform}-${targetArch}）
 
-首次运行：直接执行本程序。exe 旁边目录即数据目录（agent.json / agents/ / .agent-state/）。
-- 未发现 agent.json 时自动打开配置向导 http://127.0.0.1:39870/setup
-- 填 hub 地址（如 novoard.firoyang.com）+ 成员 ID + Agent Token → 测试连接 → 保存并启动
-- 配置好后：磁贴面板与 target 编辑器见启动日志（默认 127.0.0.1:39871）
-
-Windows 提示：未签名 exe 首次运行会弹 SmartScreen——点"更多信息"→"仍要运行"。
-开机自启：任务计划程序，"起始于"填本 exe 所在目录。
+${usage}
+完整说明：https://github.com/shichao402/novoard-agent
 `
   );
 

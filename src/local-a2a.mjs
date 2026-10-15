@@ -1,15 +1,17 @@
 /**
- * 本地 A2A 端点（ADR-0008 载体决策落地；M4 遗留项收口）：
- * mac-home agent 同进程起 127.0.0.1:<port> HTTP 服务，承担两个职责——
+ * 本地 A2A / Web 控制台端点（ADR-0008 载体决策落地；M4 遗留项收口）：
+ * agent 同进程起 HTTP 服务（默认 127.0.0.1；Linux 可显式受保护地开放），承担两个职责——
  *   1. localhost A2A JSON-RPC 端点（POST /a2a）：磁贴/热键/托盘/CLI 的统一触发入口（PRD-1 触发路径统一），
  *      message/send 直连本地 runtime（不经 hub 隧道），tasks/get 查本地状态；
  *      actor = tile-client，lane = a2a，落 agent 侧审计（与 hub 侧同一份语义，ADR-0004）。
  *   2. 零构建磁贴面板（GET /）：PRD-1 F1 磁贴视图 + SSE 进度（M4 message/stream 语义的本地版）。
  * 本地闭环（PRD-1 AC2）：hub 不在线时本端点完整可用；hub 在线时终态经隧道上行同步给 hub 队列。
- * 鉴权：仅监听 127.0.0.1（本机边界即鉴权边界，契约 §8 单用户试点语义）。
+ * 鉴权：回环监听以本机为边界；非回环监听强制独立 UI Token + HttpOnly 会话。
  */
 import { createServer } from "node:http";
+import { isIP } from "node:net";
 import { editorPage } from "./editor-page.mjs";
+import { createUiAccess, isLoopbackHost, uiLoginPage } from "./ui-access.mjs";
 
 const TERMINAL = new Set(["completed", "failed", "canceled", "rejected"]);
 
@@ -30,19 +32,29 @@ function createLocalTasks() {
 
 /** 写端点同源校验（localhost HTTP 服务标准加固，setup 向导复用导出）：Host 必须本机回环；带 Origin 时必须同源。
  *  挡跨站表单 POST（浏览器不给跨域 PUT 发简单请求预检外的都带 Origin）与 DNS rebinding。 */
-export function sameOrigin(req) {
+export function sameOrigin(req, { allowRemote = false } = {}) {
   let host = String(req.headers.host ?? "");
   if (host.startsWith("[")) host = host.slice(0, host.indexOf("]") + 1); // [::1] / [::1]:port
   else host = host.split(":")[0];
-  if (!["127.0.0.1", "localhost", "[::1]"].includes(host)) return false;
+  const hostname = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (allowRemote) {
+    if (hostname !== "localhost" && isIP(hostname) === 0) return false;
+  } else if (!isLoopbackHost(hostname)) {
+    return false;
+  }
   const origin = req.headers.origin;
   if (origin) {
-    try { if (new URL(origin).hostname !== host.replace(/^\[|\]$/g, "")) return false; } catch { return false; }
+    try {
+      if (new URL(origin).hostname.replace(/^\[|\]$/g, "").toLowerCase() !== hostname) return false;
+    } catch {
+      return false;
+    }
   }
   return true;
 }
 
-export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved } = {}) {
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved } = {}) {
+  const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
   let currentTargets = targets;
@@ -102,6 +114,48 @@ export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = 
 
   const server = createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
+    if (access.remote && req.method === "GET" && url.pathname === "/login") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(uiLoginPage());
+      return;
+    }
+    if (access.remote && req.method === "POST" && url.pathname === "/api/ui/login") {
+      if (!sameOrigin(req, { allowRemote: true })) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, reason: "登录请求来源不合法" }));
+        return;
+      }
+      readJsonBody(req).then((body) => {
+        if (!body.ok) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, reason: body.reason }));
+          return;
+        }
+        if (!access.authenticate(body.data?.token)) {
+          res.writeHead(401, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+          res.end(JSON.stringify({ ok: false, reason: "UI Token 无效" }));
+          return;
+        }
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+          "Set-Cookie": access.setCookieHeader(),
+        });
+        res.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    if (access.rejectUnauthorized(req, res, url)) return;
+    if (req.method === "GET" && url.pathname === "/api/runtime") {
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({
+        ok: true,
+        phase: "agent",
+        agentId: card?.name ?? null,
+        uiRemote: access.remote,
+      }));
+      return;
+    }
     // target 编辑器页（M6）：零构建单页，同磁贴页纪律
     if (req.method === "GET" && url.pathname === "/editor") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -119,7 +173,7 @@ export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = 
     // 编辑器保存：校验 → 备份 → 原子写 → 热替换 + card.update（经 onTargetsSaved 回调到装配层）
     if (req.method === "PUT" && url.pathname === "/api/targets") {
       if (!store) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, reason: "编辑器未装配（store 缺失）" })); return; }
-      if (!sameOrigin(req)) { res.writeHead(403, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, reason: "写端点仅接受本机来源" })); return; }
+      if (!sameOrigin(req, { allowRemote: access.remote })) { res.writeHead(403, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, reason: "写端点来源不合法" })); return; }
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
@@ -175,6 +229,11 @@ export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = 
     }
     // A2A JSON-RPC（POST /a2a）：磁贴/热键/托盘/CLI 统一触发入口
     if (req.method === "POST" && url.pathname === "/a2a") {
+      if (!sameOrigin(req, { allowRemote: access.remote })) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32003, message: "请求来源不合法" } }));
+        return;
+      }
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
@@ -311,10 +370,42 @@ export function createLocalA2A({ port = 0, targets, card, runtime, audit, log = 
       currentTargets = next;
     },
     start() {
-      return new Promise((resolve) => server.listen(port, "127.0.0.1", () => resolve(server.address())));
+      return new Promise((resolve) => server.listen(port, access.host, () => resolve(server.address())));
     },
     close() {
-      return new Promise((resolve) => server.close(resolve));
+      return new Promise((resolve) => {
+        if (!server.listening) {
+          resolve();
+          return;
+        }
+        server.close(resolve);
+        // SSE/keep-alive 连接不能阻塞桌面 sidecar 停机。
+        server.closeAllConnections?.();
+      });
     },
+    access,
   };
+}
+
+function readJsonBody(req, limit = 64 * 1024) {
+  return new Promise((resolve) => {
+    let body = "";
+    let tooLarge = false;
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > limit) tooLarge = true;
+    });
+    req.on("end", () => {
+      if (tooLarge) {
+        resolve({ ok: false, reason: "请求体过大" });
+        return;
+      }
+      try {
+        resolve({ ok: true, data: JSON.parse(body || "{}") });
+      } catch {
+        resolve({ ok: false, reason: "JSON 解析失败" });
+      }
+    });
+    req.on("error", (error) => resolve({ ok: false, reason: error.message }));
+  });
 }

@@ -5,6 +5,7 @@
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { validateUiConfig } from "./ui-access.mjs";
 
 export function loadAgentConfig({ configPath, env = process.env } = {}) {
   const file = configPath ?? join(process.cwd(), "agent.json");
@@ -25,11 +26,28 @@ export function loadAgentConfig({ configPath, env = process.env } = {}) {
   const hubUrl = String(data.hubUrl ?? env.NOVOARD_HUB_URL ?? "").trim();
   const agentToken = String(data.agentToken ?? env.NOVOARD_AGENT_TOKEN ?? "").trim();
   const contractVersion = String(data.contractVersion ?? env.NOVOARD_CONTRACT_VERSION ?? "2.0").trim();
-  const localPort = Number(data.localPort ?? env.NOVOARD_LOCAL_PORT ?? 0) || 0;
+  // UI 监听项允许环境变量显式覆盖文件：桌面壳据此强制回环，Linux 可按需开放测试入口。
+  const localPort = Number(env.NOVOARD_LOCAL_PORT ?? data.localPort ?? data.uiPort ?? 0) || 0;
+  const uiHost = String(env.NOVOARD_UI_HOST ?? data.uiHost ?? "127.0.0.1").trim();
+  const uiToken = String(env.NOVOARD_UI_TOKEN ?? data.uiToken ?? "");
   const fields = { agentId, hubUrl, agentToken, contractVersion };
   const missing = Object.entries(fields).filter(([, v]) => !v).map(([k]) => k);
   if (missing.length) {
     return { ok: false, reason: `缺少字段：${missing.join(", ")}`, file };
   }
-  return { ok: true, version: contractVersion, ...fields, localPort, file };
+  if (!Number.isInteger(localPort) || localPort < 0 || localPort > 65535) {
+    return { ok: false, reason: `localPort 不合法：${localPort}`, file };
+  }
+  const ui = validateUiConfig({ host: uiHost, token: uiToken });
+  if (!ui.ok) return { ok: false, reason: ui.reason, file };
+  return {
+    ok: true,
+    version: contractVersion,
+    ...fields,
+    localPort,
+    uiHost: ui.host,
+    uiToken: ui.token,
+    uiRemote: ui.remote,
+    file,
+  };
 }

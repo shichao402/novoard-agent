@@ -1,7 +1,7 @@
 {
   "name": "novoard-agent",
-  "version": "0.2.0",
-  "description": "Novoard 联邦执行 agent：跨平台面板 + target 编辑器 + runner + setup 向导，接入任意 Novoard hub",
+  "version": "0.3.0",
+  "description": "Novoard 联邦执行 agent：Windows/macOS 托盘桌面壳 + Linux 无头服务，接入任意 Novoard hub",
   "type": "module",
   "bin": {
     "novoard-agent": "src/sea-entry.mjs"
@@ -9,6 +9,12 @@
   "scripts": {
     "start": "node src/main.mjs",
     "build": "node scripts/build-agent.mjs",
+    "smoke:sidecar": "node scripts/smoke-agent-host.mjs",
+    "desktop:stage": "node scripts/stage-desktop-sidecar.mjs",
+    "desktop:check": "cargo test --manifest-path desktop/src-tauri/Cargo.toml",
+    "desktop:dev": "npm run build && npm run desktop:stage && cd desktop && npx tauri dev",
+    "desktop:build": "npm run build && npm run desktop:stage && cd desktop && npx tauri build",
+    "release:sync-version": "node scripts/sync-release-version.mjs",
     "contract-gate": "node scripts/check-contract-copy.mjs",
     "test": "npm run contract-gate && node --test \"test/*.mjs\""
   },
@@ -18,6 +24,7 @@
     "yaml": "^2.5.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.3",
     "esbuild": "^0.28.2",
     "postject": "^1.0.0-alpha.6"
   },

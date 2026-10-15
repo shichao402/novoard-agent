@@ -3,7 +3,7 @@
  * 四种 step：script（shell）/ openApp / openPath / template（装载期已展开，运行期只剩前三类）。
  * 插值 {{var}}：触发时 vars > target vars > 模板默认值；无来源即失败（不静默空串）。
  * 任一步失败即 target 失败（终态 failed，携带失败步骤号与 stderr 摘要）。
- * cancel：SIGTERM → 3s 后 SIGKILL（试点单进程，不做进程组树）。
+ * cancel：SIGTERM → 3s 后 SIGKILL；Unix 回收独立进程组，Windows 用 taskkill /T 回收进程树。
  */
 import { spawn } from "node:child_process";
 
@@ -15,6 +15,7 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
   }
   let currentChild = null;
   let canceled = false;
+  let forceKillTimer = null;
 
   async function run(triggerVars = {}) {
     const resolved = { ...targetVars, ...triggerVars };
@@ -44,7 +45,13 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
     return new Promise((resolve) => {
       const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
       const flag = process.platform === "win32" ? "/c" : "-c";
-      const child = spawn(shell, [flag, cmd], { cwd: workDir, env: env ? { ...process.env, ...env } : process.env });
+      const child = spawn(shell, [flag, cmd], {
+        cwd: workDir,
+        env: env ? { ...process.env, ...env } : process.env,
+        // Unix 下建立独立进程组，取消时能连同脚本派生的子进程一起回收。
+        detached: process.platform !== "win32",
+        windowsHide: true,
+      });
       const startedAt = Date.now();
       let stdout = "";
       let stderr = "";
@@ -52,6 +59,7 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
       child.stderr.on("data", (d) => (stderr += String(d)));
       child.on("error", (error) => resolve({ ok: false, stderr: `spawn 失败：${error.message}` }));
       child.on("close", (code) => {
+        if (currentChild === child) currentChild = null;
         log.info?.(`[step ${index + 1}] ${cmd.slice(0, 80)} → exit ${code} (${Date.now() - startedAt}ms)`);
         if (code === 0) resolve({ ok: true, stdout, stderr });
         else if (canceled) resolve({ ok: false, state: "canceled", stderr: stderr || "canceled" });
@@ -92,13 +100,37 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
   function cancel() {
     canceled = true;
     if (currentChild?.pid) {
-      try { currentChild.kill("SIGTERM"); } catch {}
       const pid = currentChild.pid;
-      setTimeout(() => {
-        try { process.kill(pid, "SIGKILL"); } catch {}
-      }, 3000).unref?.();
+      terminateTree(pid, false);
+      if (!forceKillTimer) {
+        forceKillTimer = setTimeout(() => {
+          terminateTree(pid, true);
+          forceKillTimer = null;
+        }, 3000);
+        forceKillTimer.unref?.();
+      }
     }
   }
 
   return { run, cancel };
+}
+
+/** 跨平台终止脚本进程树：Unix 杀进程组，Windows 使用 taskkill /T。 */
+function terminateTree(pid, force) {
+  if (!pid) return;
+  if (process.platform === "win32") {
+    try {
+      const child = spawn("taskkill", ["/pid", String(pid), "/t", ...(force ? ["/f"] : [])], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      child.unref?.();
+    } catch {}
+    return;
+  }
+  try {
+    process.kill(-pid, force ? "SIGKILL" : "SIGTERM");
+  } catch {
+    try { process.kill(pid, force ? "SIGKILL" : "SIGTERM"); } catch {}
+  }
 }

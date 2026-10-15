@@ -16,7 +16,7 @@ import { createTargetsStore } from "./targets-store.mjs";
 
 const HERE = moduleHere();
 
-/** 模块定位（dev=src/lite-agent/；SEA/打包形态 import.meta 不可用时为 null，此时由 sea-entry 显式传 agentDir）。 */
+/** 模块定位（dev=src/；SEA/打包形态 import.meta 不可用时为 null，此时由 sea-entry 显式传 agentDir）。 */
 function moduleHere() {
   try {
     return dirname(fileURLToPath(import.meta.url));
@@ -25,7 +25,7 @@ function moduleHere() {
   }
 }
 
-export async function createLiteAgent({ configPath, agentDir, stateDir, log = console, env = process.env } = {}) {
+export async function createLiteAgent({ configPath, agentDir, stateDir, log = console, env = process.env, onFatal } = {}) {
   const config = loadAgentConfig({ configPath, env });
   if (!config.ok) throw new Error(config.reason);
 
@@ -69,6 +69,7 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     runner: runtime,
     stateDir: state,
     log,
+    onFatal,
   });
 
   // 终态上行同时落 agent 侧审计（契约 §6 两侧对账）
@@ -85,6 +86,8 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
   // hub 在线时终态经隧道上行（triggerHook）；离线时本地闭环（PRD-1 AC2）
   const localA2A = createLocalA2A({
     port: Number(config.localPort ?? 0),
+    host: config.uiHost,
+    uiToken: config.uiToken,
     targets: expanded.targets,
     card: cardRef.current,
     runtime,
@@ -97,13 +100,21 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     },
   });
   const localAddr = await localA2A.start();
-  log.info?.(`[local-a2a] localhost 端点: http://127.0.0.1:${localAddr.port} （磁贴面板 + 触发入口）`);
+  const uiHostForUrl = config.uiHost.includes(":") ? `[${config.uiHost}]` : config.uiHost;
+  log.info?.(`[local-a2a] Web 控制台: http://${uiHostForUrl}:${localAddr.port} （磁贴面板 + 触发入口）`);
+  if (config.uiRemote) {
+    log.error?.("[local-a2a] 警告：Web 控制台正在非回环地址监听，仅应用于受控测试网络；优先使用 SSH 端口转发。");
+  }
 
   await tunnel.start();
 
   /** 统一停机：关隧道 + localhost 端点（测试与优雅退出共用）。 */
+  let stopped = false;
   async function stop() {
+    if (stopped) return;
+    stopped = true;
     tunnel.close();
+    await runtime.shutdown();
     await localA2A.close();
   }
 
@@ -118,7 +129,8 @@ export function main() {
       console.log(`Novoard lite-agent 已启动：${agent.config.agentId}`);
       console.log(`  skills: ${agent.card.skills.map((s) => s.id).join(", ") || "无"}`);
       console.log(`  hub: ${agent.config.hubUrl}  state: .agent-state/`);
-      console.log(`  local: http://127.0.0.1:${agent.localA2A.server.address().port} （磁贴面板）`);
+      const host = agent.config.uiHost.includes(":") ? `[${agent.config.uiHost}]` : agent.config.uiHost;
+      console.log(`  local: http://${host}:${agent.localA2A.server.address().port} （磁贴面板）`);
     })
     .catch((error) => {
       console.error(`lite-agent 启动失败：${error.message}`);

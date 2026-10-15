@@ -19,3 +19,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Build Linux SEA
+        run: npm run build
+        env:
+          NOVOARD_BUILD_PLATFORM: linux
+          NOVOARD_BUILD_ARCH: x64
+      - name: Smoke SEA host protocol
+        run: npm run smoke:sidecar
+        env:
+          NOVOARD_BUILD_PLATFORM: linux
+          NOVOARD_BUILD_ARCH: x64

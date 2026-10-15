@@ -8,25 +8,12 @@ on:
 permissions:
   contents: write
 
+env:
+  NOVOARD_RELEASE_TAG: ${{ github.ref_name }}
+
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            platform: win32
-            arch: x64
-          - os: macos-latest
-            platform: darwin
-            arch: arm64
-          - os: macos-13
-            platform: darwin
-            arch: x64
-          - os: ubuntu-latest
-            platform: linux
-            arch: x64
-    runs-on: ${{ matrix.os }}
+  test:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,26 +21,107 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run release:sync-version
       - run: npm test
+
+  desktop:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32
+            arch: x64
+            rust-target: x86_64-pc-windows-msvc
+            bundle: nsis
+            extension: exe
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+            rust-target: aarch64-apple-darwin
+            bundle: dmg
+            extension: dmg
+          - os: macos-15-intel
+            platform: darwin
+            arch: x64
+            rust-target: x86_64-apple-darwin
+            bundle: dmg
+            extension: dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+      - run: npm ci
+      - run: npm run release:sync-version
       - name: Build SEA binary
-        run: node scripts/build-agent.mjs
-      - name: Package zip (unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          cd build/dist/${{ matrix.platform }}-${{ matrix.arch }}
-          zip -r "../../../novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}.zip" .
-      - name: Package zip (windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "build/dist/${{ matrix.platform }}-${{ matrix.arch }}/*" -DestinationPath "novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}.zip" -Force
+        run: npm run build
+        env:
+          NOVOARD_BUILD_PLATFORM: ${{ matrix.platform }}
+          NOVOARD_BUILD_ARCH: ${{ matrix.arch }}
+      - name: Smoke SEA host protocol
+        run: npm run smoke:sidecar
+        env:
+          NOVOARD_BUILD_PLATFORM: ${{ matrix.platform }}
+          NOVOARD_BUILD_ARCH: ${{ matrix.arch }}
+      - name: Stage SEA sidecar
+        run: npm run desktop:stage
+        env:
+          NOVOARD_BUILD_PLATFORM: ${{ matrix.platform }}
+          NOVOARD_BUILD_ARCH: ${{ matrix.arch }}
+          TAURI_TARGET_TRIPLE: ${{ matrix.rust-target }}
+      - name: Desktop unit tests
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --target ${{ matrix.rust-target }}
+      - name: Build desktop installer
+        working-directory: desktop
+        run: npx tauri build --ci --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundle }}
       - name: Upload artifact (workflow debug)
         uses: actions/upload-artifact@v4
         with:
-          name: novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}
-          path: novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}.zip
+          name: novoard-agent-desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: desktop/src-tauri/target/**/bundle/${{ matrix.bundle }}/*.${{ matrix.extension }}
       - name: Attach to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}.zip
+          files: desktop/src-tauri/target/**/bundle/${{ matrix.bundle }}/*.${{ matrix.extension }}
+
+  linux-headless:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run release:sync-version
+      - run: npm run build
+        env:
+          NOVOARD_BUILD_PLATFORM: linux
+          NOVOARD_BUILD_ARCH: x64
+      - run: npm run smoke:sidecar
+        env:
+          NOVOARD_BUILD_PLATFORM: linux
+          NOVOARD_BUILD_ARCH: x64
+      - name: Package headless zip
+        shell: bash
+        run: |
+          cd build/dist/linux-x64
+          zip -r "../../../novoard-agent-linux-x64.zip" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: novoard-agent-linux-x64
+          path: novoard-agent-linux-x64.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: novoard-agent-linux-x64.zip

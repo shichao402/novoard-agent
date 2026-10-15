@@ -5,42 +5,122 @@
  * 与源码入口（main.mjs main()）的差异：
  *   1. schemas 内嵌：globalThis.__NOVOARD_EMBEDDED_SCHEMAS__ 在本模块顶部注入，
  *      frames.mjs 的 createFrameValidator 优先取内嵌（校验路径与 dev 完全同一条）；
- *   2. 路径锚定：agent.json / agents/<agentId>/ / .agent-state/ 一律 cwd 锚定
- *      （二进制形态 = "exe 旁边的目录即数据目录"，无需感知源码树）；
+ *   2. 路径锚定：agent.json / agents/<agentId>/ / .agent-state/ 锚定 NOVOARD_DATA_DIR，
+ *      未设置时回退 cwd（Linux 直接运行形态无需感知源码树）；
  *   3. setup 模式：agent.json 缺失不报错退出，起 127.0.0.1 配置向导并自动开浏览器；
  *      向导保存后 onReady 热启动（createLiteAgent 是工厂，免重启装配）。
  */
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { EMBEDDED_SCHEMAS } from "../build/embedded-schemas.gen.mjs";
 import { loadAgentConfig } from "./config.mjs";
 import { createLiteAgent } from "./main.mjs";
 import { createSetupWizard } from "./setup-wizard.mjs";
+import { createHostProtocol } from "./host-protocol.mjs";
 
 globalThis.__NOVOARD_EMBEDDED_SCHEMAS__ = EMBEDDED_SCHEMAS;
 
-const SETUP_PORT = Number(process.env.NOVOARD_SETUP_PORT ?? 39870);
+const HOST_MODE = process.env.NOVOARD_HOST_PROTOCOL === "ndjson";
+const DATA_DIR = resolve(process.env.NOVOARD_DATA_DIR || process.cwd());
+const SETUP_PORT = Number(process.env.NOVOARD_SETUP_PORT ?? (HOST_MODE ? 0 : 39870));
+const UI_HOST = HOST_MODE ? "127.0.0.1" : String(process.env.NOVOARD_UI_HOST ?? "127.0.0.1");
+const UI_TOKEN = HOST_MODE ? "" : String(process.env.NOVOARD_UI_TOKEN ?? "");
+
+mkdirSync(DATA_DIR, { recursive: true });
+process.chdir(DATA_DIR);
+if (HOST_MODE) {
+  // 桌面 WebView 永远走回环；即使 agent.json 曾用于 Linux 远程测试也不能继承外放配置。
+  process.env.NOVOARD_UI_HOST = "127.0.0.1";
+  process.env.NOVOARD_UI_TOKEN = "";
+}
 
 let bootedAgent = null;
+let setupWizard = null;
+let shuttingDown = null;
+let hostProtocol = null;
+
+/** 宿主模式 stdout 只留协议；人类日志统一送 stderr。 */
+const serviceLog = HOST_MODE
+  ? {
+      info: (...args) => console.error(...args),
+      error: (...args) => console.error(...args),
+    }
+  : console;
+
+function emit(type, detail) {
+  hostProtocol?.emit(type, detail);
+}
+
+/**
+ * SEA 统一停机路径。宿主命令、stdin 断开、SIGINT/SIGTERM 与 fatal 都走这里，
+ * 保证隧道、HTTP 和 runner 子进程按同一顺序回收。
+ */
+async function shutdown(reason, exitCode = 0) {
+  if (shuttingDown) return shuttingDown;
+  shuttingDown = (async () => {
+    emit("stopping", { reason });
+    if (setupWizard?.server?.listening) {
+      try { await setupWizard.close(); } catch {}
+    }
+    if (bootedAgent) {
+      try { await bootedAgent.stop(); } catch (error) {
+        serviceLog.error(`agent 停机失败：${error?.message ?? error}`);
+        exitCode = 1;
+      }
+    }
+    emit("stopped", { reason, exitCode });
+    hostProtocol?.close();
+    process.exitCode = exitCode;
+  })();
+  return shuttingDown;
+}
+
+if (HOST_MODE) {
+  hostProtocol = createHostProtocol({
+    onCommand: async (command) => {
+      if (command.type === "shutdown") {
+        await shutdown("host-command");
+        return;
+      }
+      emit("protocol-error", { code: "unknown-command", message: `未知宿主命令：${command.type}` });
+    },
+    onDisconnect: async () => {
+      await shutdown("host-disconnected");
+    },
+  });
+}
 
 /** cwd 锚定装配（与 dev 唯一差异是 agentDir/stateDir 的锚点），重复调用幂等返回已启动实例。 */
 async function bootAgent() {
   if (bootedAgent) return bootedAgent;
-  const cwd = process.cwd();
-  const probe = loadAgentConfig({ configPath: join(cwd, "agent.json") });
+  const probe = loadAgentConfig({ configPath: join(DATA_DIR, "agent.json") });
   if (!probe.ok) throw new Error(probe.reason);
   const agent = await createLiteAgent({
     configPath: probe.file,
-    agentDir: join(cwd, "agents", probe.agentId),
-    stateDir: join(cwd, ".agent-state"),
-    log: { info() {}, error(...args) { console.error(...args); } },
+    agentDir: join(DATA_DIR, "agents", probe.agentId),
+    stateDir: join(DATA_DIR, ".agent-state"),
+    log: serviceLog,
+    onFatal: async (fatal) => {
+      emit("fatal", fatal);
+      await shutdown("agent-fatal", 1);
+    },
   });
   bootedAgent = agent;
   const panelPort = agent.localA2A.server.address().port;
-  console.log(`Novoard agent 已启动：${agent.config.agentId}`);
-  console.log(`  hub: ${agent.config.hubUrl}`);
-  console.log(`  面板: http://127.0.0.1:${panelPort} · 编辑器: http://127.0.0.1:${panelPort}/editor`);
+  const panelHost = agent.config.uiHost.includes(":") ? `[${agent.config.uiHost}]` : agent.config.uiHost;
+  const panelUrl = `http://${panelHost}:${panelPort}`;
+  const editorUrl = `${panelUrl}/editor`;
+  serviceLog.info(`Novoard agent 已启动：${agent.config.agentId}`);
+  serviceLog.info(`  hub: ${agent.config.hubUrl}`);
+  serviceLog.info(`  面板: ${panelUrl} · 编辑器: ${editorUrl}`);
+  emit("ui-ready", {
+    view: "panel",
+    url: panelUrl,
+    panelUrl,
+    editorUrl,
+    agentId: agent.config.agentId,
+  });
   return agent;
 }
 
@@ -56,19 +136,33 @@ function openBrowser(url) {
 }
 
 async function main() {
-  const cwd = process.cwd();
-  if (!existsSync(join(cwd, "agent.json"))) {
-    const wizard = createSetupWizard({ dir: cwd, port: SETUP_PORT, onReady: bootAgent, log: console });
-    const addr = await wizard.start();
-    console.log(`首次接入：未发现 agent.json，配置向导已就绪 http://127.0.0.1:${addr.port}/setup`);
-    console.log(`（向导保存后自动启动 agent；数据目录：${cwd}）`);
-    openBrowser(`http://127.0.0.1:${addr.port}/setup`);
+  if (!existsSync(join(DATA_DIR, "agent.json"))) {
+    setupWizard = createSetupWizard({
+      dir: DATA_DIR,
+      port: SETUP_PORT,
+      host: UI_HOST,
+      uiToken: UI_TOKEN,
+      onReady: bootAgent,
+      log: serviceLog,
+    });
+    const addr = await setupWizard.start();
+    const setupHost = UI_HOST.includes(":") ? `[${UI_HOST}]` : UI_HOST;
+    const setupUrl = `http://${setupHost}:${addr.port}/setup`;
+    serviceLog.info(`首次接入：未发现 agent.json，配置向导已就绪 ${setupUrl}`);
+    serviceLog.info(`（向导保存后自动启动 agent；数据目录：${DATA_DIR}）`);
+    emit("ui-ready", { view: "setup", url: setupUrl, setupUrl });
+    if (!HOST_MODE) openBrowser(setupUrl);
     return;
   }
   await bootAgent();
 }
 
-main().catch((error) => {
-  console.error(`novoard-agent 启动失败：${error?.message ?? error}`);
-  process.exit(1);
+process.once("SIGINT", () => { void shutdown("SIGINT"); });
+process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
+
+main().catch(async (error) => {
+  const message = `novoard-agent 启动失败：${error?.message ?? error}`;
+  serviceLog.error(message);
+  emit("fatal", { code: "startup-failed", message });
+  await shutdown("startup-failed", 1);
 });

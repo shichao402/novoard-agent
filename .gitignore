@@ -2,6 +2,16 @@
 node_modules/
 build/
 dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/binaries/*
+!desktop/src-tauri/binaries/.gitkeep
+desktop/src-tauri/icons/android/
+desktop/src-tauri/icons/ios/
+desktop/src-tauri/icons/Square*Logo.png
+desktop/src-tauri/icons/StoreLogo.png
+desktop/src-tauri/icons/64x64.png
+desktop/src-tauri/icons/icon.png
 *.local.json
 .state/
 .agent-state/
