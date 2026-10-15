@@ -79,6 +79,49 @@ test("契约 2.0：Bearer 身份绑定 agentId，hello 不再携带 token", asyn
   }
 });
 
+test("契约 2.0：hello 与重连会上报 runner 中的挂起任务", async () => {
+  const hub = await createMockHub({ tokens: { "agent-a": "agent-a-secret" } });
+  const stateDir = mkdtempSync(join(tmpdir(), "novoard-agent-v2-inflight-"));
+  const port = hub.server.address().port;
+  const runner = {
+    ...RUNNER,
+    get runningTasks() {
+      return [{ id: "task-input-required-1", state: "input-required" }];
+    },
+  };
+  const client = createTunnelClient({
+    config: {
+      ok: true,
+      agentId: "agent-a",
+      hubUrl: `ws://127.0.0.1:${port}/tunnel`,
+      agentToken: "agent-a-secret",
+      contractVersion: "2.0",
+    },
+    card: CARD,
+    targets: TARGETS,
+    runner,
+    stateDir,
+    log: { info() {}, error() {} },
+  });
+  try {
+    await client.start();
+    await waitFor(() => client.registered);
+    let helloFrames = hub.frames.filter((frame) => frame.body?.type === "agent.hello");
+    assert.deepEqual(helloFrames[0].body.inFlightTaskIds, ["task-input-required-1"]);
+
+    hub.members.get("agent-a").ws.close();
+    await waitFor(() =>
+      hub.frames.filter((frame) => frame.body?.type === "agent.hello").length >= 2,
+    4_000);
+    helloFrames = hub.frames.filter((frame) => frame.body?.type === "agent.hello");
+    assert.deepEqual(helloFrames.at(-1).body.inFlightTaskIds, ["task-input-required-1"]);
+  } finally {
+    client.close();
+    await hub.close();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("契约 2.0：agent 上传 artifact 自动携带 taskId、base64 内容与 sha256", async () => {
   const hub = await createMockHub({ tokens: { "agent-a": "agent-a-secret" } });
   const stateDir = mkdtempSync(join(tmpdir(), "novoard-agent-v2-artifact-"));
