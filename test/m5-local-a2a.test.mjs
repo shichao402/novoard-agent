@@ -205,21 +205,40 @@ test("M5 F5 open-instance 模板：装载/展开通过，模板引用合法（fi
   assert.ok(card.skills.some((s) => s.id === "open-demo"));
 });
 
-test("M5 磁贴面板页面可达（PWA 基础件）", async () => {
+test("M5 控制台静态资源由本机服务提供", async () => {
   const { local, cleanup } = makeStack();
   await local.start();
+  const uiDir = mkdtempSync(join(tmpdir(), "novoard-ui-"));
+  writeFileSync(join(uiDir, "index.html"), "<!doctype html><title>Novoard Agent</title><div id=\"root\"></div>");
+  writeFileSync(join(uiDir, "app.js"), "export default 1;\n");
+  const withUi = createLocalA2A({
+    targets: {},
+    runtime: { launch() { return { ok: true }; }, cancel() { return { ok: true }; }, resume() { return { ok: true }; } },
+    audit() {},
+    log: { info() {} },
+    uiRoot: uiDir,
+  });
+  await withUi.start();
   try {
-    const port = local.server.address().port;
+    const bare = local.server.address().port;
+    const missing = await fetch(`http://127.0.0.1:${bare}/`);
+    assert.equal(missing.status, 404);
+    await missing.body?.cancel();
+
+    const port = withUi.server.address().port;
     const page = await fetch(`http://127.0.0.1:${port}/`);
     assert.equal(page.status, 200);
     assert.match(page.headers.get("content-type"), /text\/html/);
-    const html = await page.text();
-    assert.match(html, /Novoard/);
-    assert.match(html, /manifest\.webmanifest/);
-    const manifest = await fetch(`http://127.0.0.1:${port}/manifest.webmanifest`);
-    assert.equal(manifest.status, 200);
+    assert.match(await page.text(), /id="root"/);
+    const asset = await fetch(`http://127.0.0.1:${port}/app.js`);
+    assert.equal(asset.status, 200);
+    assert.match(asset.headers.get("content-type"), /javascript/);
+    const escaped = await fetch(`http://127.0.0.1:${port}/%2e%2e/%2e%2e/package.json`);
+    assert.equal(escaped.status, 404);
   } finally {
     await local.close();
+    await withUi.close();
     cleanup();
+    rmSync(uiDir, { recursive: true, force: true });
   }
 });

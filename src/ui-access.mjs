@@ -1,9 +1,9 @@
 /**
  * 本地 Web 控制台访问策略。
  *
- * 回环监听沿用单用户本机边界，不增加登录步骤；非回环监听会暴露 target
- * 编辑与命令触发能力，因此必须配置独立 uiToken，并通过 HttpOnly 会话认证。
- * 该模式只用于 Linux 测试/运维，不复用 hub agentToken。
+ * 回环监听沿用单用户本机边界，不增加登录步骤。
+ * 非回环 uiHost 把同一套控制台暴露到机器网络或公网，必须配置独立 uiToken，
+ * 并通过 HttpOnly 会话认证。该令牌不复用 hub agentToken。
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
@@ -64,8 +64,7 @@ export function createUiAccess(options = {}) {
     if (authorized(req)) return false;
     const wantsHtml = req.method === "GET"
       && !url.pathname.startsWith("/api/")
-      && url.pathname !== "/a2a"
-      && url.pathname !== "/manifest.webmanifest";
+      && url.pathname !== "/a2a";
     if (wantsHtml) {
       res.writeHead(302, { Location: "/login", "Cache-Control": "no-store" });
       res.end();

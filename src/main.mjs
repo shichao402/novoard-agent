@@ -11,8 +11,12 @@ import { loadAgentConfig } from "./config.mjs";
 import { loadTargets, expandSteps, deriveCard } from "./card.mjs";
 import { createAgentRuntime } from "./agent-runtime.mjs";
 import { createTunnelClient } from "./tunnel-client.mjs";
+import { resolveConsoleRoot } from "./console-ui.mjs";
 import { createLocalA2A } from "./local-a2a.mjs";
 import { createTargetsStore } from "./targets-store.mjs";
+import { persistAgentConfig, testConnection } from "./setup-wizard.mjs";
+import { createChatBridge } from "./chat-bridge.mjs";
+import { publicCodebuddyConfig, readCodebuddyConfig, saveCodebuddyConfig } from "./codebuddy-config.mjs";
 
 const HERE = moduleHere();
 
@@ -48,7 +52,11 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
   /** editor 保存后 card 热更新（tunnel 上报用新 card；hello 重连也带最新） */
   const cardRef = { current: card };
 
-  const runtime = createAgentRuntime({ targets: expanded.targets, log });
+  const runtime = createAgentRuntime({
+    targets: expanded.targets,
+    log,
+    shortcutLogDir: join(dirname(log.file || join(dirname(state), "logs", "agent.jsonl")), "shortcuts"),
+  });
 
   // target 编辑器后端（M6）：保存 → 从盘重装载 → 热替换 runtime/localA2A 注册表 → card.update 上报 hub
   const store = createTargetsStore({ agentDir: dir, agentId: config.agentId, log });
@@ -82,12 +90,15 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     } });
   };
 
-  // 本地 A2A 端点 + 磁贴面板（ADR-0008；PRD-1 触发路径统一：磁贴/热键/CLI → localhost 端点）
+  // 本地 A2A 端点（ADR-0008；PRD-1 触发路径统一：磁贴/热键/CLI → 本机端点）
   // hub 在线时终态经隧道上行（triggerHook）；离线时本地闭环（PRD-1 AC2）
+  const codebuddyFile = join(dirname(state), "codebuddy.json");
+  const chat = createChatBridge({ dataDir: state, codebuddyFile, log });
   const localA2A = createLocalA2A({
     port: Number(config.localPort ?? 0),
     host: config.uiHost,
     uiToken: config.uiToken,
+    uiRoot: resolveConsoleRoot(),
     targets: expanded.targets,
     card: cardRef.current,
     runtime,
@@ -95,13 +106,51 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     log,
     store,
     onTargetsSaved,
+    status: () => ({ hubConnected: tunnel.connected === true, hubRegistered: tunnel.registered === true }),
+    settings: {
+      read: () => ({
+        agentId: config.agentId,
+        hubUrl: config.hubUrl,
+        localPort: config.localPort,
+        hasToken: Boolean(config.agentToken),
+        contractVersion: config.version,
+      }),
+      test: (input) => testConnection({ hubUrl: input?.hubUrl, agentToken: String(input?.agentToken ?? "").trim() || config.agentToken }),
+      save: (input) => {
+        const token = String(input.agentToken ?? "").trim() || config.agentToken;
+        return persistAgentConfig({
+          dir: dirname(config.file),
+          hubUrl: input.hubUrl,
+          agentId: input.agentId,
+          agentToken: token,
+          localPort: input.localPort ?? config.localPort,
+          uiHost: "127.0.0.1",
+          uiToken: "",
+          log,
+        });
+      },
+    },
+    activityFile: auditFile,
+    logFile: log.file || join(dirname(state), "logs", "agent.jsonl"),
+    shortcutLogDir: join(dirname(log.file || join(dirname(state), "logs", "agent.jsonl")), "shortcuts"),
+    codebuddy: {
+      read: () => publicCodebuddyConfig(readCodebuddyConfig(codebuddyFile)),
+      save: (input) => {
+        const saved = saveCodebuddyConfig(codebuddyFile, input);
+        log.info?.(`[codebuddy] 已保存类型 ${saved.environment}，模型 ${saved.model || "默认"}`);
+        return { ok: true, public: publicCodebuddyConfig(saved) };
+      },
+    },
+    chat,
     triggerHook: (state, skillId, taskId) => {
       if (TERMINAL_STATES_SET.has(state)) tunnel.uplinkTerminal?.(taskId, state, `tile-trigger ${skillId}`);
     },
   });
   const localAddr = await localA2A.start();
+  const panelHost = config.uiHost.includes(":") ? `[${config.uiHost}]` : config.uiHost;
+  chat.setOrigin(`http://${panelHost}:${localAddr.port}`);
   const uiHostForUrl = config.uiHost.includes(":") ? `[${config.uiHost}]` : config.uiHost;
-  log.info?.(`[local-a2a] Web 控制台: http://${uiHostForUrl}:${localAddr.port} （磁贴面板 + 触发入口）`);
+  log.info?.(`[local-a2a] 控制台: http://${uiHostForUrl}:${localAddr.port}`);
   if (config.uiRemote) {
     log.error?.("[local-a2a] 警告：Web 控制台正在非回环地址监听，仅应用于受控测试网络；优先使用 SSH 端口转发。");
   }
@@ -114,6 +163,7 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     if (stopped) return;
     stopped = true;
     tunnel.close();
+    chat.close();
     await runtime.shutdown();
     await localA2A.close();
   }
@@ -130,7 +180,7 @@ export function main() {
       console.log(`  skills: ${agent.card.skills.map((s) => s.id).join(", ") || "无"}`);
       console.log(`  hub: ${agent.config.hubUrl}  state: .agent-state/`);
       const host = agent.config.uiHost.includes(":") ? `[${agent.config.uiHost}]` : agent.config.uiHost;
-      console.log(`  local: http://${host}:${agent.localA2A.server.address().port} （磁贴面板）`);
+      console.log(`  local: http://${host}:${agent.localA2A.server.address().port}`);
     })
     .catch((error) => {
       console.error(`lite-agent 启动失败：${error.message}`);

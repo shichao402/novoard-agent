@@ -8,7 +8,6 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import vm from "node:vm";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,11 +55,13 @@ test("M6F2 testConnection：真 hub 探测——错 token 401，正确 token ope
 
 test("M6F2 向导 save：骨架 targets.yaml + agent.json(0600) + onReady 热启动 + 向导关闭", async () => {
   const dir = mkdtempSync(join(tmpdir(), "novoard-f2wiz-"));
+  const uiDir = mkdtempSync(join(tmpdir(), "novoard-f2ui-"));
   let wizard = null;
   let booted = null;
   try {
+    writeFileSync(join(uiDir, "index.html"), "<!doctype html><div id=\"root\"></div>");
     wizard = createSetupWizard({
-      dir, port: 0,
+      dir, port: 0, uiRoot: uiDir,
       onReady: async (config) => {
         booted = config;
         return { localA2A: { server: { address: () => ({ port: 41234 }) } } };
@@ -70,10 +71,10 @@ test("M6F2 向导 save：骨架 targets.yaml + agent.json(0600) + onReady 热启
     const addr = await wizard.start();
     const port = addr.port;
 
-    // 页面可达
     const page = await fetch(`http://127.0.0.1:${port}/setup`);
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /首次接入/);
+    assert.match(page.headers.get("content-type"), /text\/html/);
+    assert.match(await page.text(), /id="root"/);
 
     // 根路径重定向到 /setup
     const root = await fetch(`http://127.0.0.1:${port}/`, { redirect: "manual" });
@@ -128,6 +129,7 @@ test("M6F2 向导 save：骨架 targets.yaml + agent.json(0600) + onReady 热启
   } finally {
     try { await wizard?.close(); } catch {}
     rmSync(dir, { recursive: true, force: true });
+    rmSync(uiDir, { recursive: true, force: true });
   }
 });
 
@@ -221,20 +223,6 @@ test("M6F2 sameOrigin 导出：跨源 Host 拒绝，本机回环放行", () => {
   assert.equal(sameOrigin({ headers: { host: "localhost:39870" } }), true);
   assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "http://127.0.0.1:39870" } }), true);
   assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "http://evil.example.com" } }), false);
-});
-
-test("M6F2 回归：/setup 向导页内嵌 JS 语法可解析（三页面全覆盖的最后一页）", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "novoard-f2wizp-"));
-  let wizard = null;
-  try {
-    wizard = createSetupWizard({ dir, port: 0, onReady: async () => {}, log: { info() {} } });
-    const addr = await wizard.start();
-    const html = await (await fetch(`http://127.0.0.1:${addr.port}/setup`)).text();
-    const m = html.match(/<script>([\s\S]*)<\/script>/);
-    assert.ok(m, "向导页应有内嵌 script 块");
-    assert.doesNotThrow(() => new vm.Script(m[1]), "向导页内嵌 JS 必须可被解析");
-  } finally {
-    await wizard?.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
+  assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "http://tauri.localhost" } }), true);
+  assert.equal(sameOrigin({ headers: { host: "evil.example.com", origin: "http://tauri.localhost" } }), false);
 });

@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Novoard Agent desktop client",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "allow-read-logs",
+    "allow-restart-agent",
+    "allow-autostart-enabled",
+    "allow-set-autostart",
+    "allow-open-log-dir",
+    "dialog:allow-open"
+  ]
+}

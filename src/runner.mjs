@@ -9,23 +9,38 @@ import { spawn } from "node:child_process";
 
 const VAR_RE = /\{\{(\w+)\}\}/g;
 
-export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd(), log = console, onProgress = () => {} } = {}) {
+export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd(), timeoutMs = 0, onOutput = () => {}, onProgress = () => {} } = {}) {
   if (!Array.isArray(steps) || steps.length === 0) {
     throw new Error("steps 必须是非空数组");
   }
   let currentChild = null;
   let canceled = false;
+  let timedOut = false;
   let forceKillTimer = null;
 
   async function run(triggerVars = {}) {
-    const resolved = { ...targetVars, ...triggerVars };
-    for (let i = 0; i < steps.length; i++) {
-      if (canceled) return { ok: false, step: i + 1, state: "canceled", stderr: "canceled before step" };
-      const result = await runStep(steps[i], resolved, i);
-      onProgress?.(i + 1, steps.length, describeStep(steps[i], i));
-      if (!result.ok) return { ok: false, step: i + 1, state: result.state ?? "failed", stderr: result.stderr };
+    const timer = timeoutMs > 0
+      ? setTimeout(() => {
+        timedOut = true;
+        onOutput("status", `运行超过 ${timeoutMs}ms，正在停止`);
+        cancel();
+      }, timeoutMs)
+      : null;
+    timer?.unref?.();
+    try {
+      const resolved = { ...targetVars, ...triggerVars };
+      for (let i = 0; i < steps.length; i++) {
+        if (timedOut) return { ok: false, step: i + 1, state: "failed", stderr: "运行超时" };
+        if (canceled) return { ok: false, step: i + 1, state: "canceled", stderr: "canceled before step" };
+        const result = await runStep(steps[i], resolved, i);
+        onProgress?.(i + 1, steps.length, describeStep(steps[i], i));
+        if (timedOut) return { ok: false, step: i + 1, state: "failed", stderr: "运行超时" };
+        if (!result.ok) return { ok: false, step: i + 1, state: result.state ?? "failed", stderr: result.stderr };
+      }
+      return { ok: true, step: steps.length, state: "completed" };
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-    return { ok: true, step: steps.length, state: "completed" };
   }
 
   function runStep(step, vars, index) {
@@ -43,27 +58,40 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
 
   function execScript(cmd, { cwd: workDir, env, index }) {
     return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
       const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
       const flag = process.platform === "win32" ? "/c" : "-c";
+      onOutput("status", `[step ${index + 1}] ${cmd}`);
       const child = spawn(shell, [flag, cmd], {
         cwd: workDir,
         env: env ? { ...process.env, ...env } : process.env,
-        // Unix 下建立独立进程组，取消时能连同脚本派生的子进程一起回收。
         detached: process.platform !== "win32",
         windowsHide: true,
       });
-      const startedAt = Date.now();
       let stdout = "";
       let stderr = "";
-      child.stdout.on("data", (d) => (stdout += String(d)));
-      child.stderr.on("data", (d) => (stderr += String(d)));
-      child.on("error", (error) => resolve({ ok: false, stderr: `spawn 失败：${error.message}` }));
+      child.stdout.on("data", (chunk) => {
+        const text = String(chunk);
+        stdout = tail(stdout, text);
+        onOutput("stdout", text);
+      });
+      child.stderr.on("data", (chunk) => {
+        const text = String(chunk);
+        stderr = tail(stderr, text);
+        onOutput("stderr", text);
+      });
+      child.on("error", (error) => finish({ ok: false, stderr: `spawn 失败：${error.message}` }));
       child.on("close", (code) => {
         if (currentChild === child) currentChild = null;
-        log.info?.(`[step ${index + 1}] ${cmd.slice(0, 80)} → exit ${code} (${Date.now() - startedAt}ms)`);
-        if (code === 0) resolve({ ok: true, stdout, stderr });
-        else if (canceled) resolve({ ok: false, state: "canceled", stderr: stderr || "canceled" });
-        else resolve({ ok: false, stderr: stderr || `exit ${code}` });
+        if (timedOut) finish({ ok: false, state: "failed", stderr: "运行超时" });
+        else if (code === 0) finish({ ok: true, stdout, stderr });
+        else if (canceled) finish({ ok: false, state: "canceled", stderr: stderr || "canceled" });
+        else finish({ ok: false, stderr: stderr || `exit ${code}` });
       });
       currentChild = child;
     });
@@ -113,6 +141,11 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
   }
 
   return { run, cancel };
+}
+
+function tail(current, chunk, max = 4096) {
+  const next = current + chunk;
+  return next.length > max ? next.slice(-max) : next;
 }
 
 /** 跨平台终止脚本进程树：Unix 杀进程组，Windows 使用 taskkill /T。 */

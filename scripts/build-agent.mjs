@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { join, basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertReleaseMatches, bakeEdition, resolveEdition } from "./edition.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BUILD = join(ROOT, "build");
@@ -77,6 +78,27 @@ function seaBlob() {
   if (!existsSync(join(BUILD, "sea-prep.blob"))) throw new Error("SEA blob 生成失败");
 }
 
+/** Windows 官方 node 是控制台子系统。改成 GUI 子系统后，桌面壳拉起 sidecar 不会再弹出黑色控制台。 */
+function setWindowsGuiSubsystem(exePath) {
+  const buf = readFileSync(exePath);
+  if (buf.length < 0x40 || buf.toString("ascii", 0, 2) !== "MZ") {
+    throw new Error(`无法修改子系统，不是 PE：${exePath}`);
+  }
+  const peOffset = buf.readUInt32LE(0x3c);
+  if (buf.toString("ascii", peOffset, peOffset + 4) !== "PE\0\0") {
+    throw new Error(`PE 签名无效：${exePath}`);
+  }
+  const optional = peOffset + 24;
+  const magic = buf.readUInt16LE(optional);
+  if (magic !== 0x10b && magic !== 0x20b) throw new Error(`未知 PE magic：0x${magic.toString(16)}`);
+  const subsystemAt = optional + 68;
+  const current = buf.readUInt16LE(subsystemAt);
+  if (current !== 2 && current !== 3) throw new Error(`未知 subsystem：${current}`);
+  buf.writeUInt16LE(2, subsystemAt); // IMAGE_SUBSYSTEM_WINDOWS_GUI
+  writeFileSync(exePath, buf);
+  console.log(`✓ Windows 子系统已设为 GUI（原 ${current}）`);
+}
+
 /** 4. 复制 node 并注入。程序化 postject API（跨平台无 .bin shim 问题）。 */
 async function inject() {
   step(`注入 blob 到 node 二进制（${targetPlatform}-${targetArch}）`);
@@ -121,14 +143,18 @@ async function inject() {
     await postject(exePath, sentinel, blobData, { sentinelFuse: FUSE });
   }
 
+  if (isWin) setWindowsGuiSubsystem(exePath);
+  stageConsole(outDir);
+
   // 附带发行件（Windows/macOS 的该二进制会作为 Tauri sidecar；Linux 直接分发）。
   const usage = targetPlatform === "linux"
     ? `无头使用：
 - 本目录就是数据目录（agent.json / agents/ / .agent-state/）
 - 未发现 agent.json 时启动 http://127.0.0.1:39870/setup
-- 推荐 SSH 转发访问；测试网络远程开放需同时设置 NOVOARD_UI_HOST=0.0.0.0 与至少 16 字符的 NOVOARD_UI_TOKEN
+- 推荐 SSH 转发访问。要对其他机器或公网开放，设置 NOVOARD_UI_HOST=0.0.0.0，并配置至少 16 字符的 NOVOARD_UI_TOKEN
+- 若本目录有 ui/，浏览器打开控制台地址即可使用和桌面端同一套界面
 `
-    : `本文件是桌面安装包内使用的 Agent service sidecar，面向用户请运行 Novoard Agent 桌面应用。
+    : `本文件是桌面安装包内使用的 Agent service sidecar，面向用户请运行 ${resolveEdition().productName} 桌面应用。
 如需诊断，可直接执行；工作目录即数据目录。
 `;
   writeFileSync(
@@ -144,8 +170,22 @@ ${usage}
   console.log(`✓ 产物：${exePath}（${sizeMb} MB）`);
 }
 
+function stageConsole(outDir) {
+  const dist = join(ROOT, "desktop", "dist");
+  const destination = join(outDir, "ui");
+  rmSync(destination, { recursive: true, force: true });
+  if (!existsSync(join(dist, "index.html"))) {
+    console.log("未找到 desktop/dist，发行目录不带控制台页面。需要时先在 desktop 执行 npm run build。");
+    return;
+  }
+  cpSync(dist, destination, { recursive: true });
+  console.log(`控制台页面：${destination}`);
+}
+
 async function main() {
-  console.log(`Novoard agent SEA 打包：目标 ${targetPlatform}-${targetArch}，node ${process.version}`);
+  const edition = bakeEdition();
+  assertReleaseMatches(JSON.parse(readFileSync(join(ROOT, "desktop", "src-tauri", "tauri.conf.json"), "utf8")));
+  console.log(`Novoard agent SEA 打包：目标 ${targetPlatform}-${targetArch}，node ${process.version}，版本 ${edition.productName}`);
   genEmbeddedSchemas();
   await bundle();
   seaBlob();

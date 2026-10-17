@@ -1,17 +1,20 @@
 /**
- * 本地 A2A / Web 控制台端点（ADR-0008 载体决策落地；M4 遗留项收口）：
- * agent 同进程起 HTTP 服务（默认 127.0.0.1；Linux 可显式受保护地开放），承担两个职责——
- *   1. localhost A2A JSON-RPC 端点（POST /a2a）：磁贴/热键/托盘/CLI 的统一触发入口（PRD-1 触发路径统一），
+ * 本地 A2A / 控制台端点（ADR-0008 载体决策落地；M4 遗留项收口）：
+ * agent 同进程起 HTTP 服务。Windows、macOS、Linux 用同一套接口。
+ *   1. A2A JSON-RPC（POST /a2a）：磁贴/热键/托盘/CLI 的统一触发入口（PRD-1 触发路径统一），
  *      message/send 直连本地 runtime（不经 hub 隧道），tasks/get 查本地状态；
  *      actor = tile-client，lane = a2a，落 agent 侧审计（与 hub 侧同一份语义，ADR-0004）。
- *   2. 零构建磁贴面板（GET /）：PRD-1 F1 磁贴视图 + SSE 进度（M4 message/stream 语义的本地版）。
+ *   2. 控制台 API，以及可选的同一份 React 控制台静态资源。界面不在这里另写一套。
+ * 默认只监听回环。uiHost 配成非回环地址时，同一服务对机器网络或公网开放，并要求独立 uiToken。
  * 本地闭环（PRD-1 AC2）：hub 不在线时本端点完整可用；hub 在线时终态经隧道上行同步给 hub 队列。
- * 鉴权：回环监听以本机为边界；非回环监听强制独立 UI Token + HttpOnly 会话。
  */
 import { createServer } from "node:http";
 import { isIP } from "node:net";
-import { editorPage } from "./editor-page.mjs";
+import { serveConsole } from "./console-ui.mjs";
 import { createUiAccess, isLoopbackHost, uiLoginPage } from "./ui-access.mjs";
+import { readJsonlTail } from "./jsonl.mjs";
+import { pageLogFile } from "./log-page.mjs";
+import { listShortcutRuns, shortcutRunFile } from "./shortcut-log.mjs";
 
 const TERMINAL = new Set(["completed", "failed", "canceled", "rejected"]);
 
@@ -30,8 +33,11 @@ function createLocalTasks() {
   };
 }
 
+const DESKTOP_SHELL_HOSTS = new Set(["tauri.localhost", "ipc.localhost"]);
+
 /** 写端点同源校验（localhost HTTP 服务标准加固，setup 向导复用导出）：Host 必须本机回环；带 Origin 时必须同源。
- *  挡跨站表单 POST（浏览器不给跨域 PUT 发简单请求预检外的都带 Origin）与 DNS rebinding。 */
+ *  挡跨站表单 POST（浏览器不给跨域 PUT 发简单请求预检外的都带 Origin）与 DNS rebinding。
+ *  桌面壳页面来自 tauri.localhost，只在请求 Host 已是回环时放行。 */
 export function sameOrigin(req, { allowRemote = false } = {}) {
   let host = String(req.headers.host ?? "");
   if (host.startsWith("[")) host = host.slice(0, host.indexOf("]") + 1); // [::1] / [::1]:port
@@ -44,16 +50,51 @@ export function sameOrigin(req, { allowRemote = false } = {}) {
   }
   const origin = req.headers.origin;
   if (origin) {
+    let originHost = "";
     try {
-      if (new URL(origin).hostname.replace(/^\[|\]$/g, "").toLowerCase() !== hostname) return false;
+      originHost = new URL(origin).hostname.replace(/^\[|\]$/g, "").toLowerCase();
     } catch {
       return false;
     }
+    if (originHost === hostname) return true;
+    if (isLoopbackHost(hostname) && DESKTOP_SHELL_HOSTS.has(originHost)) return true;
+    return false;
   }
   return true;
 }
 
-export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved } = {}) {
+/** 桌面 WebView 与回环页面访问本机 API 时补上 CORS；其它来源不发允许头。 */
+export function handleDesktopCors(req, res) {
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  let originHost = "";
+  try {
+    originHost = new URL(origin).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  } catch {
+    originHost = "";
+  }
+  const allowed = isLoopbackHost(originHost) || DESKTOP_SHELL_HOSTS.has(originHost);
+  if (!allowed) {
+    if (req.method === "OPTIONS") {
+      res.writeHead(403);
+      res.end();
+      return true;
+    }
+    return false;
+  }
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Vary", "Origin");
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return true;
+  }
+  return false;
+}
+
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat } = {}) {
   const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
@@ -95,6 +136,8 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", tar
       task.state = "failed";
       task.status = { state: "failed", message: r.reason };
       audit?.({ lane: "a2a", target: skillId, taskId: id, outcome: "failed", detail: { reason: r.reason } });
+    } else if (r.log) {
+      task.log = r.log;
     }
     return { ok: true, task };
   }
@@ -112,7 +155,14 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", tar
     }
   }
 
+  function json(res, status, body) {
+    if (res.headersSent || res.writableEnded) return;
+    res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(body));
+  }
+
   const server = createServer((req, res) => {
+    if (handleDesktopCors(req, res)) return;
     const url = new URL(req.url, "http://127.0.0.1");
     if (access.remote && req.method === "GET" && url.pathname === "/login") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
@@ -147,19 +197,77 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", tar
     }
     if (access.rejectUnauthorized(req, res, url)) return;
     if (req.method === "GET" && url.pathname === "/api/runtime") {
+      const live = status?.() ?? {};
       res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(JSON.stringify({
         ok: true,
         phase: "agent",
         agentId: card?.name ?? null,
         uiRemote: access.remote,
+        hubConnected: live.hubConnected === true,
+        hubRegistered: live.hubRegistered === true,
       }));
       return;
     }
-    // target 编辑器页（M6）：零构建单页，同磁贴页纪律
-    if (req.method === "GET" && url.pathname === "/editor") {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(editorPage());
+    if (req.method === "GET" && url.pathname === "/api/settings") {
+      if (!settings?.read) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, reason: "设置接口未装配" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ ok: true, ...settings.read() }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/setup/test") {
+      if (!settings?.test) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, reason: "连接测试未装配" }));
+        return;
+      }
+      if (!sameOrigin(req, { allowRemote: access.remote })) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, reason: "写端点来源不合法" }));
+        return;
+      }
+      readJsonBody(req).then(async (body) => {
+        if (!body.ok) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, reason: body.reason }));
+          return;
+        }
+        const result = await settings.test(body.data ?? {});
+        res.writeHead(result.ok ? 200 : 422, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(result));
+      });
+      return;
+    }
+    if (req.method === "PUT" && url.pathname === "/api/settings") {
+      if (!settings?.save) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, reason: "设置接口未装配" }));
+        return;
+      }
+      if (!sameOrigin(req, { allowRemote: access.remote })) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, reason: "写端点来源不合法" }));
+        return;
+      }
+      readJsonBody(req).then((body) => {
+        if (!body.ok) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, reason: body.reason }));
+          return;
+        }
+        const saved = settings.save(body.data ?? {});
+        if (!saved.ok) {
+          res.writeHead(422, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, errors: saved.errors ?? [saved.reason] }));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ ok: true, restartRequired: true, agentId: saved.config.agentId }));
+      });
       return;
     }
     // 编辑器数据源：盘上定义（YAML 原文 + 解析后 targets + 平台提示）
@@ -188,24 +296,13 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", tar
       });
       return;
     }
-    // 磁贴面板（PRD-1 F1）：零构建单页，读同一份 targets 注册表
-    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(tilePage());
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/manifest.webmanifest") {
-      res.writeHead(200, { "Content-Type": "application/manifest+json" });
-      res.end(JSON.stringify({ name: "Novoard Tiles", short_name: "Novoard", start_url: "/", display: "standalone", background_color: "#0f1115", theme_color: "#0f1115" }));
-      return;
-    }
     // 磁贴数据：targets 全量 + 各 target 最近一次执行（US5 状态点/上次时间）
     if (req.method === "GET" && url.pathname === "/api/tiles") {
       const tiles = Object.entries(getTargets())
         .filter(([, t]) => t.expose !== "none")
         .map(([id, t]) => {
           const last = tasks.lastOf(id);
-          return { id, title: t.title ?? id, requiresApproval: t.requiresApproval === true, icon: t.icon ?? "▶", last: last ? { state: last.state, message: last.status.message, at: last.updatedAt } : null };
+          return { id, title: t.title ?? id, requiresApproval: t.requiresApproval === true, concurrency: t.concurrency ?? 1, timeout: t.timeout ?? "10m", icon: t.icon ?? "▶", last: last ? { state: last.state, message: last.status.message, at: last.updatedAt, log: last.log ?? null } : null };
         });
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ tiles, tasks: tasks.list().slice(0, 20) }));
@@ -296,70 +393,114 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", tar
       });
       return;
     }
+    if (req.method === "GET" && url.pathname === "/api/activity") {
+      const limit = Number(url.searchParams.get("limit") ?? 40);
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ ok: true, events: readJsonlTail(activityFile, Number.isFinite(limit) ? limit : 40).reverse() }));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/logs") {
+      const page = url.searchParams.get("page") ?? 1;
+      const level = url.searchParams.get("level") ?? "all";
+      const query = url.searchParams.get("q") ?? "";
+      const pageSize = url.searchParams.get("pageSize") ?? undefined;
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ ok: true, ...pageLogFile(logFile, { page, level, query, pageSize }) }));
+      return;
+    }
+    const shortcutRuns = url.pathname.match(/^\/api\/shortcuts\/([a-z0-9][a-z0-9-]*)\/runs$/);
+    if (req.method === "GET" && shortcutRuns) {
+      if (!getTargets()[shortcutRuns[1]]) return json(res, 404, { ok: false, reason: "unknown target" });
+      json(res, 200, { ok: true, retentionDays: 30, runs: listShortcutRuns(shortcutLogDir, shortcutRuns[1]) });
+      return;
+    }
+    const shortcutLog = url.pathname.match(/^\/api\/shortcuts\/([a-z0-9][a-z0-9-]*)\/runs\/(task-[A-Za-z0-9-]+)$/);
+    if (req.method === "GET" && shortcutLog) {
+      const file = shortcutRunFile(shortcutLogDir, shortcutLog[1], shortcutLog[2]);
+      if (!file) return json(res, 404, { ok: false, reason: "这次运行没有内部日志" });
+      json(res, 200, { ok: true, log: `shortcuts/${shortcutLog[1]}/${shortcutLog[2]}.jsonl`, ...pageLogFile(file, { page: url.searchParams.get("page") ?? 1 }) });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/codebuddy") {
+      if (!codebuddy?.read) return json(res, 404, { ok: false, reason: "CodeBuddy 配置未装配" });
+      json(res, 200, { ok: true, ...codebuddy.read() });
+      return;
+    }
+    if (req.method === "PUT" && url.pathname === "/api/codebuddy") {
+      if (!codebuddy?.save) return json(res, 404, { ok: false, reason: "CodeBuddy 配置未装配" });
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      readJsonBody(req).then((body) => {
+        if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+        const saved = codebuddy.save(body.data ?? {});
+        if (!saved.ok) return json(res, 422, { ok: false, errors: saved.errors ?? [saved.reason] });
+        chat?.reload?.();
+        json(res, 200, { ok: true, ...saved.public });
+      }).catch((error) => json(res, 500, { ok: false, message: error.message }));
+      return;
+    }
+    if (url.pathname === "/api/agent/doctor" && req.method === "GET") {
+      if (!chat) return json(res, 503, { ok: false, message: "会话能力未装配" });
+      chat.doctor().then((result) => json(res, 200, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
+      return;
+    }
+    if (url.pathname === "/api/sessions" && req.method === "GET") {
+      if (!chat) return json(res, 503, { ok: false, message: "会话能力未装配" });
+      chat.list().then((result) => json(res, 200, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
+      return;
+    }
+    if (url.pathname === "/api/sessions" && req.method === "POST") {
+      if (!chat) return json(res, 503, { ok: false, message: "会话能力未装配" });
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      readJsonBody(req).then((body) => {
+        const title = body.ok ? body.data?.title : undefined;
+        return chat.create(title);
+      }).then((result) => json(res, 201, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
+      return;
+    }
+    const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)(?:\/(messages|interrupt))?$/);
+    if (sessionMatch) {
+      if (!chat) return json(res, 503, { ok: false, message: "会话能力未装配" });
+      const sessionId = decodeURIComponent(sessionMatch[1]);
+      const action = sessionMatch[2];
+      if (req.method === "GET" && !action) {
+        chat.history(sessionId).then((result) => json(res, 200, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
+        return;
+      }
+      if (req.method === "DELETE" && !action) {
+        if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+        chat.remove(sessionId).then((result) => json(res, 200, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
+        return;
+      }
+      if (req.method === "POST" && action === "interrupt") {
+        if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+        chat.interrupt(sessionId).then((result) => json(res, 200, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
+        return;
+      }
+      if (req.method === "POST" && action === "messages") {
+        if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+        readJsonBody(req, 256 * 1024).then(async (body) => {
+          if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+          req.setTimeout(0);
+          res.setTimeout(0);
+          res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+          try {
+            const result = await chat.send(sessionId, body.data?.text ?? "", (event) => {
+              res.write(`data: ${JSON.stringify(event)}\n\n`);
+            });
+            res.write(`data: ${JSON.stringify({ kind: "result", session: result.session })}\n\n`);
+            res.end();
+          } catch (error) {
+            res.write(`data: ${JSON.stringify({ kind: "error", text: error.message })}\n\n`);
+            res.end();
+          }
+        });
+        return;
+      }
+    }
+    if (serveConsole(uiRoot, req, res, url)) return;
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "not found" }));
   });
-
-  /** 零构建磁贴页（PRD-1 F1/US5；PWA 基础件）。 */
-  function tilePage() {
-    return `<!doctype html>
-<html lang="zh"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Novoard 磁贴</title>
-<link rel="manifest" href="/manifest.webmanifest">
-<style>
-  body { font-family: -apple-system, "PingFang SC", sans-serif; background: #0f1115; color: #e6e8ee; margin: 0; padding: 24px; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  .sub { color: #8b93a7; font-size: 12px; margin-bottom: 20px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
-  .tile { background: #1a1e26; border: 1px solid #262c38; border-radius: 12px; padding: 14px; cursor: pointer; transition: all .15s; }
-  .tile:hover { border-color: #4a90d9; transform: translateY(-1px); }
-  .tile .icon { font-size: 22px; }
-  .tile .title { font-weight: 600; font-size: 14px; margin: 6px 0 4px; }
-  .tile .meta { font-size: 11px; color: #8b93a7; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
-  .dot.running, .dot.submitted { background: #f5a623; animation: pulse 1s infinite; }
-  .dot.completed { background: #34c759; }
-  .dot.failed, .dot.canceled, .dot.rejected { background: #ff5f57; }
-  .dot.input-required { background: #4a90d9; }
-  @keyframes pulse { 50% { opacity: .4; } }
-  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #2a3040; padding: 8px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .3s; }
-  .toast.show { opacity: 1; }
-</style></head><body>
-<h1>Novoard</h1><div class="sub">磁贴触发 · 本地闭环（hub 离线可用）</div>
-<div class="grid" id="grid"></div>
-<div class="toast" id="toast"></div>
-<script>
-  async function load() {
-    const r = await fetch("/api/tiles");
-    const { tiles } = await r.json();
-    grid.innerHTML = tiles.map((t) => {
-      const d = t.last?.state ?? "idle";
-      const at = t.last?.at ? new Date(t.last.at).toLocaleTimeString() : "—";
-      return \`<div class="tile" onclick="fire('\${t.id}')">
-        <div class="icon">\${t.icon}</div><div class="title">\${t.title}</div>
-        <div class="meta"><span class="dot \${d}"></span>\${d} · \${at}</div>
-      </div>\`;
-    }).join("");
-  }
-  async function fire(id) {
-    toast(\`触发 \${id}…\`);
-    const r = await fetch("/a2a", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { messageId: "m" + Date.now(), role: "user", parts: [{ kind: "text", text: id }] } } }) });
-    const b = await r.json();
-    if (b.error) { toast(b.error.message); return; }
-    const es = new EventSource("/api/stream/" + b.result.id);
-    es.onmessage = (ev) => {
-      const f = JSON.parse(ev.data);
-      toast(\`\${id}: \${f.status.state} \${f.status.message ?? ""}\`.slice(0, 80));
-      if (f.final) { es.close(); load(); }
-    };
-  }
-  function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 3000); }
-  load();
-  setInterval(load, 4000);
-</script></body></html>`;
-  }
 
   return {
     server,

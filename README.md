@@ -8,10 +8,10 @@ Novoard 联邦执行 Agent：安装在 Windows、macOS 或无头 Linux 机器上
 
 - **Windows**：安装后常驻系统托盘。双击图标或选择“打开 Novoard”显示独立控制台窗口；关窗只隐藏，选择“退出”才停止 Agent。
 - **macOS**：安装后常驻菜单栏，打开后使用与 Windows 基本一致的独立控制台窗口。
-- **Linux**：保持无头 SEA 二进制，不创建托盘或桌面窗口；本地 Web 控制台默认仅监听 `127.0.0.1`。
+- **Linux**：保持无头 SEA 二进制，不创建托盘或桌面窗口。它跑的是同一套本机服务，默认只监听 `127.0.0.1`。
 - **Hub**：三端使用同一契约注册到 Hub，均可从 Hub 控制台触发 target 并上报进度与终态。本地桌面壳不参与 Hub 隧道。
 
-Windows/macOS 的桌面部分是独立 Tauri 轻壳：它只启动和监管内置 SEA sidecar，并把 sidecar 提供的 setup、磁贴面板和 `/editor` 页面嵌入 WebView。执行逻辑和页面没有桌面版分叉。
+Windows/macOS 的桌面部分是独立 Tauri 轻壳：它启动并监管内置 SEA sidecar，窗口里是同一份 React 控制台。Linux 没有窗口，浏览器直接打开 sidecar 的地址。执行逻辑和接口没有桌面版分叉。
 
 ## 架构
 
@@ -36,16 +36,16 @@ Windows/macOS 的桌面部分是独立 Tauri 轻壳：它只启动和监管内�
 
 ## Linux 无头使用
 
-直接运行发行 zip 中的 `novoard-agent`。无 `agent.json` 时会启动 `127.0.0.1:39870/setup`；已有配置后，控制台端口取 `localPort`，为 `0` 时由系统动态分配并打印到日志。
+直接运行发行 zip 中的 `novoard-agent`。无 `agent.json` 时会启动 `127.0.0.1:39870/setup`；已有配置后，控制台端口取 `localPort`，为 `0` 时由系统动态分配并打印到日志。浏览器打开这个地址，看到的是和 Windows / macOS 同一套控制台。
 
-推荐通过 SSH 转发访问默认的回环页面：
+推荐通过 SSH 转发访问默认的回环地址：
 
 ```bash
 ssh -L 39870:127.0.0.1:39870 user@linux-host
 # 本机浏览器打开 http://127.0.0.1:39870/setup
 ```
 
-仅在受控测试网络中需要直接远程访问时，显式设置非回环监听和独立 UI Token：
+需要从其他机器或公网直接访问时，把监听地址配成非回环，并设置独立 UI Token：
 
 ```bash
 NOVOARD_UI_HOST=0.0.0.0 \
@@ -54,7 +54,7 @@ NOVOARD_LOCAL_PORT=39871 \
 ./novoard-agent
 ```
 
-然后访问 `http://<linux-ip>:39871/` 并先完成 UI 登录。`uiToken` 与 Hub Agent Token 相互独立；非回环监听缺少合格 token 时 Agent 会拒绝启动。该测试模式是明文 HTTP，不应暴露到公网。也可将 `uiHost`、`uiToken`、`localPort` 写入权限为 `0600` 的本机 `agent.json`。
+然后访问 `http://<主机>:39871/`，先用 UI Token 登录。`uiToken` 与 Hub Agent Token 相互独立；非回环监听缺少合格 token 时 Agent 会拒绝启动。这是明文 HTTP，公网使用时应放在自己的 TLS 反代后面。`uiHost`、`uiToken`、`localPort` 也可以写入权限为 `0600` 的本机 `agent.json`。
 
 target 定义位于 `agents/<agentId>/targets.yaml`；编辑器保存会先校验，再热替换 runtime、磁贴和 Hub card，不合法内容不会落盘。
 

@@ -8,7 +8,6 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import vm from "node:vm";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, writeFileSync as wfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -301,56 +300,5 @@ test("M6 e2e：编辑保存 → card.update → hub 聚合 card / catalog 即时
     rmSync(hubDir, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });
     rmSync(agentState, { recursive: true, force: true });
-  }
-});
-
-test("M6 编辑器页面可达：GET /editor 返回零构建单页", async () => {
-  const s = stack();
-  await s.local.start();
-  try {
-    const port = s.local.server.address().port;
-    const page = await fetch(`http://127.0.0.1:${port}/editor`);
-    assert.equal(page.status, 200);
-    assert.match(page.headers.get("content-type"), /text\/html/);
-    const html = await page.text();
-    assert.match(html, /target 编辑器/);
-    assert.match(html, /表单模式/);
-    assert.match(html, /YAML 源码/);
-  } finally {
-    await s.local.close();
-    s.cleanup();
-  }
-});
-
-test("M6 回归：/editor 内嵌 JS 语法可解析（v0.2.0 引号转义事故）", async () => {
-  const s = stack();
-  await s.local.start();
-  try {
-    const port = s.local.server.address().port;
-    const html = await (await fetch(`http://127.0.0.1:${port}/editor`)).text();
-    const m = html.match(/<script>([\s\S]*)<\/script>/);
-    assert.ok(m, "应有内嵌 script 块");
-    assert.doesNotThrow(() => new vm.Script(m[1]), "内嵌 JS 必须可被解析（浏览器口径）");
-    // 事故根因断言：不允许再出现转义后的裸引号传参（模板字符串吃掉 \\' 后引号提前闭合）
-    assert.doesNotMatch(m[1], /setDefType\('/, "setDefType 应经 this.value 传参，不应字符串字面量");
-    assert.match(m[1], /setDefType\(this\.value\)/);
-  } finally {
-    await s.local.close();
-    s.cleanup();
-  }
-});
-
-test("M6 回归：磁贴页 / 内嵌 JS 语法可解析", async () => {
-  const s = stack();
-  await s.local.start();
-  try {
-    const port = s.local.server.address().port;
-    const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
-    const m = html.match(/<script>([\s\S]*)<\/script>/);
-    assert.ok(m, "磁贴页应有内嵌 script 块");
-    assert.doesNotThrow(() => new vm.Script(m[1]), "磁贴页内嵌 JS 必须可被解析");
-  } finally {
-    await s.local.close();
-    s.cleanup();
   }
 });

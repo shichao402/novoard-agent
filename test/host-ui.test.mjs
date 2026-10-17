@@ -108,11 +108,14 @@ test("配置加载：桌面环境变量可覆盖落盘的远程 UI 设置", () =
 
 test("远程 setup：未登录重定向，UI Token 登录后可访问并持久化安全配置", async () => {
   const dir = mkdtempSync(join(tmpdir(), "novoard-remote-setup-"));
+  const uiDir = mkdtempSync(join(tmpdir(), "novoard-remote-setup-ui-"));
+  writeFileSync(join(uiDir, "index.html"), "<!doctype html><div id=\"root\"></div>");
   const wizard = createSetupWizard({
     dir,
     port: 0,
     host: "0.0.0.0",
     uiToken: UI_TOKEN,
+    uiRoot: uiDir,
     log: { info() {}, error() {} },
   });
   try {
@@ -139,6 +142,7 @@ test("远程 setup：未登录重定向，UI Token 登录后可访问并持久�
     const cookie = login.headers.get("set-cookie").split(";")[0];
     const page = await fetch(`${base}/setup`, { headers: { Cookie: cookie } });
     assert.equal(page.status, 200);
+    assert.match(await page.text(), /id="root"/);
 
     const saved = wizard.saveConfig({
       hubUrl: "http://127.0.0.1:9999",
@@ -151,6 +155,7 @@ test("远程 setup：未登录重定向，UI Token 登录后可访问并持久�
   } finally {
     await wizard.close();
     rmSync(dir, { recursive: true, force: true });
+    rmSync(uiDir, { recursive: true, force: true });
   }
 });
 
@@ -191,8 +196,9 @@ test("远程 agent 控制台：页面、SSE/API 共用会话，写操作仍校�
       body: JSON.stringify({ token: UI_TOKEN }),
     });
     const cookie = login.headers.get("set-cookie").split(";")[0];
-    assert.equal((await fetch(`${base}/`, { headers: { Cookie: cookie } })).status, 200);
-    assert.equal((await fetch(`${base}/editor`, { headers: { Cookie: cookie } })).status, 200);
+    const home = await fetch(`${base}/`, { headers: { Cookie: cookie } });
+    assert.equal(home.status, 404);
+    await home.body?.cancel();
     assert.equal((await fetch(`${base}/api/tiles`, { headers: { Cookie: cookie } })).status, 200);
     const health = await (await fetch(`${base}/api/runtime`, { headers: { Cookie: cookie } })).json();
     assert.equal(health.uiRemote, true);

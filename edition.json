@@ -1,0 +1,38 @@
+{
+  "release": {
+    "id": "release",
+    "productName": "Novoard Agent",
+    "windowTitle": "Novoard Agent",
+    "shortName": "Novoard",
+    "subtitle": "Agent",
+    "identifier": "com.novoard.agent",
+    "installDirName": "Novoard Agent",
+    "mark": "N",
+    "markTone": "accent",
+    "icons": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "dev": {
+    "id": "dev",
+    "productName": "Novoard Agent Dev",
+    "windowTitle": "Novoard Agent Dev",
+    "shortName": "Novoard",
+    "subtitle": "Dev",
+    "identifier": "com.novoard.agent.dev",
+    "installDirName": "Novoard AgentDev",
+    "mark": "N",
+    "markTone": "dev",
+    "icons": [
+      "icons/dev/32x32.png",
+      "icons/dev/128x128.png",
+      "icons/dev/128x128@2x.png",
+      "icons/dev/icon.icns",
+      "icons/dev/icon.ico"
+    ]
+  }
+}

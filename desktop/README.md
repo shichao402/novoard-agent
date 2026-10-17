@@ -5,8 +5,8 @@
 运行关系：
 
 1. Tauri 从安装包启动 `novoard-agent` SEA sidecar；
-2. sidecar 以应用数据目录为工作目录，通过 stdout NDJSON 返回 setup/面板 URL；
-3. Tauri WebView 导航到该 `127.0.0.1` URL；
+2. sidecar 以应用数据目录为工作目录，通过 stdout NDJSON 返回本机 API 地址；
+3. Tauri WebView 加载安装包里的 React 控制台，再连到该地址；
 4. 关窗只隐藏，托盘“退出”通过 stdin 请求 sidecar 完整停机。
 
 `src-tauri/binaries/` 中的平台二进制由 `npm run desktop:stage` 生成并被 git 忽略。不要手工提交 sidecar，也不要把 Hub/UI token 放进桌面资源。

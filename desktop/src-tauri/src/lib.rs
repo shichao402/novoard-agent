@@ -1,7 +1,8 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    path::PathBuf,
+    io::{Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -11,28 +12,23 @@ use std::{
 use tauri::{
     menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, RunEvent, Url, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, WindowEvent,
 };
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
 };
 
+mod edition;
+
 // Tauri bundler 将 externalBin 放到桌面主程序同目录；运行期只传最终 basename。
 const SIDECAR_NAME: &str = "novoard-agent";
 const MAX_RESTARTS: usize = 3;
 
-#[derive(Default)]
-struct UiUrls {
-    current: Option<String>,
-    panel: Option<String>,
-    editor: Option<String>,
-}
-
 struct Supervisor {
     child: Mutex<Option<CommandChild>>,
-    urls: Mutex<UiUrls>,
     quitting: AtomicBool,
     fatal: AtomicBool,
     restart_requested: AtomicBool,
@@ -44,7 +40,6 @@ impl Supervisor {
     fn new(open_on_ready: bool) -> Arc<Self> {
         Arc::new(Self {
             child: Mutex::new(None),
-            urls: Mutex::new(UiUrls::default()),
             quitting: AtomicBool::new(false),
             fatal: AtomicBool::new(false),
             restart_requested: AtomicBool::new(false),
@@ -54,7 +49,7 @@ impl Supervisor {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HostEvent {
     #[serde(rename = "type")]
@@ -62,12 +57,14 @@ struct HostEvent {
     view: Option<String>,
     url: Option<String>,
     panel_url: Option<String>,
-    editor_url: Option<String>,
     code: Option<String>,
     message: Option<String>,
+    #[serde(default)]
+    agent_id: Option<String>,
 }
 
 pub fn run() {
+    let context = tauri::generate_context!();
     let start_hidden = std::env::args().any(|arg| arg == "--autostart");
     let supervisor = Supervisor::new(!start_hidden);
     let state_for_setup = supervisor.clone();
@@ -82,15 +79,43 @@ pub fn run() {
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .arg("--autostart")
-                .app_name("Novoard Agent")
+                .app_name(edition::PRODUCT_NAME)
+                .build(),
+        )
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .clear_targets()
+                .targets([Target::new(TargetKind::LogDir {
+                    file_name: Some("host".into()),
+                })])
+                .rotation_strategy(RotationStrategy::KeepSome(5))
+                .max_file_size(4_000_000)
+                .level(log::LevelFilter::Info)
                 .build(),
         )
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(supervisor.clone())
+        .invoke_handler(tauri::generate_handler![
+            read_logs,
+            restart_agent,
+            autostart_enabled,
+            set_autostart,
+            open_log_dir
+        ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            if let Some(window) = handle.get_webview_window("main") {
+                let _ = window.set_title(edition::WINDOW_TITLE);
+                if let Ok(icon) = tauri::image::Image::from_bytes(edition::WINDOW_ICON_PNG) {
+                    let _ = window.set_icon(icon);
+                }
+            }
             let autostart_enabled = initialize_autostart(&handle);
             build_tray(&handle, state_for_setup.clone(), autostart_enabled)?;
+            if !start_hidden {
+                show_main_window(&handle);
+            }
 
             #[cfg(target_os = "macos")]
             if start_hidden {
@@ -114,6 +139,15 @@ pub fn run() {
                 if !quitting {
                     api.prevent_close();
                     let _ = window.hide();
+                    static HINTED: AtomicBool = AtomicBool::new(false);
+                    if !HINTED.swap(true, Ordering::SeqCst) {
+                        if let Some(tray) = window.app_handle().tray_by_id("main") {
+                            let _ = tray.set_tooltip(Some(format!(
+                                "{} 仍在托盘里，双击图标打开",
+                                edition::PRODUCT_NAME
+                            )));
+                        }
+                    }
                     #[cfg(target_os = "macos")]
                     let _ = window
                         .app_handle()
@@ -121,7 +155,7 @@ pub fn run() {
                 }
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("构建 Novoard Agent 桌面壳失败");
 
     app.run(|app, event| {
@@ -133,6 +167,23 @@ pub fn run() {
             }
         }
     });
+}
+
+fn chat_worker_path(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(dir) = app.path().resource_dir() {
+        let staged = dir.join("agent-runtime").join("chat-worker.mjs");
+        if staged.is_file() {
+            return Some(staged);
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src/chat-worker.mjs");
+        if dev.is_file() {
+            return Some(dev);
+        }
+    }
+    None
 }
 
 fn spawn_sidecar(app: AppHandle, state: Arc<Supervisor>) -> Result<(), String> {
@@ -158,6 +209,10 @@ fn spawn_sidecar(app: AppHandle, state: Arc<Supervisor>) -> Result<(), String> {
         .env("NOVOARD_UI_HOST", "127.0.0.1")
         .env("NOVOARD_UI_TOKEN", "")
         .env("NOVOARD_SETUP_PORT", "0");
+    let command = match chat_worker_path(&app) {
+        Some(worker) => command.env("NOVOARD_CHAT_WORKER", worker),
+        None => command,
+    };
     let (mut events, child) = command
         .spawn()
         .map_err(|error| format!("无法启动 Agent sidecar：{error}"))?;
@@ -173,10 +228,13 @@ fn spawn_sidecar(app: AppHandle, state: Arc<Supervisor>) -> Result<(), String> {
                     handle_host_line(&app_for_events, &state_for_events, line.trim());
                 }
                 CommandEvent::Stderr(bytes) => {
-                    eprintln!("[agent] {}", String::from_utf8_lossy(&bytes).trim_end());
+                    let line = String::from_utf8_lossy(&bytes).trim().to_string();
+                    if !line.is_empty() {
+                        log::info!(target: "agent", "{line}");
+                    }
                 }
                 CommandEvent::Error(error) => {
-                    eprintln!("[agent] sidecar I/O error: {error}");
+                    log::error!("sidecar I/O error: {error}");
                 }
                 CommandEvent::Terminated(payload) => {
                     if let Ok(mut child) = state_for_events.child.lock() {
@@ -201,27 +259,19 @@ fn handle_host_line(app: &AppHandle, state: &Arc<Supervisor>, line: &str) {
     let event: HostEvent = match serde_json::from_str(line) {
         Ok(event) => event,
         Err(error) => {
-            eprintln!("[agent] 无法解析宿主事件：{error}: {line}");
+            log::warn!("无法解析宿主事件：{error}: {line}");
             return;
         }
     };
 
     match event.kind.as_str() {
         "ui-ready" => {
-            let Some(url) = event.url else {
+            if event.url.is_none() {
                 return;
-            };
-            {
-                let mut urls = state.urls.lock().expect("UI URL 状态锁损坏");
-                urls.current = Some(url.clone());
-                if event.view.as_deref() == Some("panel") {
-                    urls.panel = event.panel_url.or_else(|| Some(url.clone()));
-                    urls.editor = event.editor_url;
-                }
             }
             state.fatal.store(false, Ordering::SeqCst);
             state.restart_attempts.store(0, Ordering::SeqCst);
-            navigate(app, &url);
+            let _ = app.emit("agent-endpoint", &event);
             if state.open_on_ready.load(Ordering::SeqCst) {
                 show_main_window(app);
             }
@@ -284,14 +334,18 @@ fn build_tray(
     autostart_enabled: bool,
 ) -> tauri::Result<()> {
     let open = MenuItemBuilder::with_id("open", "打开 Novoard").build(app)?;
-    let editor = MenuItemBuilder::with_id("editor", "打开 Target 编辑器").build(app)?;
+    let chat = MenuItemBuilder::with_id("chat", "对话").build(app)?;
+    let actions = MenuItemBuilder::with_id("actions", "快捷操作").build(app)?;
+    let targets = MenuItemBuilder::with_id("targets", "Target").build(app)?;
+    let logs = MenuItemBuilder::with_id("logs", "日志").build(app)?;
+    let settings = MenuItemBuilder::with_id("settings", "设置").build(app)?;
     let autostart = CheckMenuItemBuilder::with_id("autostart", "登录时启动")
         .checked(autostart_enabled)
         .build(app)?;
     let restart = MenuItemBuilder::with_id("restart", "重启 Agent 服务").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
     let menu = MenuBuilder::new(app)
-        .items(&[&open, &editor])
+        .items(&[&open, &chat, &actions, &targets, &logs, &settings])
         .separator()
         .item(&autostart)
         .item(&restart)
@@ -303,12 +357,17 @@ fn build_tray(
     let state_for_menu = state.clone();
     let mut tray = TrayIconBuilder::with_id("main")
         .menu(&menu)
-        .tooltip("Novoard Agent")
+        .icon(tauri::image::Image::from_bytes(edition::TRAY_ICON_PNG)?)
+        .tooltip(edition::PRODUCT_NAME)
         // Windows 保留左键双击打开窗口；macOS 菜单栏沿用单击弹出菜单。
         .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(move |app, event| match event.id().as_ref() {
-            "open" => open_panel(app, &state_for_menu),
-            "editor" => open_editor(app, &state_for_menu),
+            "open" => reveal(app, &state_for_menu, "home"),
+            "chat" => reveal(app, &state_for_menu, "chat"),
+            "actions" => reveal(app, &state_for_menu, "actions"),
+            "targets" => reveal(app, &state_for_menu, "targets"),
+            "logs" => reveal(app, &state_for_menu, "logs"),
+            "settings" => reveal(app, &state_for_menu, "settings"),
             "autostart" => toggle_autostart(app, &autostart_item),
             "restart" => restart_sidecar(app, &state_for_menu),
             "quit" => begin_quit(app.clone(), state_for_menu.clone()),
@@ -322,7 +381,7 @@ fn build_tray(
             {
                 let app = tray.app_handle();
                 if let Some(state) = app.try_state::<Arc<Supervisor>>() {
-                    open_panel(app, &state);
+                    reveal(app, &state, "home");
                 }
             }
         });
@@ -399,40 +458,10 @@ fn restart_sidecar(app: &AppHandle, state: &Arc<Supervisor>) {
     }
 }
 
-fn open_panel(app: &AppHandle, state: &Arc<Supervisor>) {
+fn reveal(app: &AppHandle, state: &Arc<Supervisor>, view: &str) {
     state.open_on_ready.store(true, Ordering::SeqCst);
-    let url = state
-        .urls
-        .lock()
-        .ok()
-        .and_then(|urls| urls.panel.clone().or_else(|| urls.current.clone()));
-    if let Some(url) = url {
-        navigate(app, &url);
-    }
+    let _ = app.emit("client-nav", serde_json::json!({ "view": view }));
     show_main_window(app);
-}
-
-fn open_editor(app: &AppHandle, state: &Arc<Supervisor>) {
-    state.open_on_ready.store(true, Ordering::SeqCst);
-    let url = state.urls.lock().ok().and_then(|urls| urls.editor.clone());
-    if let Some(url) = url {
-        navigate(app, &url);
-    }
-    show_main_window(app);
-}
-
-fn navigate(app: &AppHandle, url: &str) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    match url.parse::<Url>() {
-        Ok(url) => {
-            if let Err(error) = window.navigate(url) {
-                eprintln!("窗口导航失败：{error}");
-            }
-        }
-        Err(error) => eprintln!("Agent 返回无效 URL：{error}"),
-    }
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -446,13 +475,15 @@ fn show_main_window(app: &AppHandle) {
 }
 
 fn set_host_status(app: &AppHandle, message: &str, is_error: bool) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    let message = serde_json::to_string(message).unwrap_or_else(|_| "\"Agent 状态未知\"".into());
-    let _ = window.eval(format!(
-        "window.setHostStatus && window.setHostStatus({message}, {is_error});"
-    ));
+    if is_error {
+        log::error!("{message}");
+    } else {
+        log::info!("{message}");
+    }
+    let _ = app.emit(
+        "agent-status",
+        serde_json::json!({ "message": message, "error": is_error }),
+    );
 }
 
 fn initialize_autostart(app: &AppHandle) -> bool {
@@ -472,7 +503,7 @@ fn initialize_autostart(app: &AppHandle) -> bool {
                 Ok(()) => {
                     let _ = fs::write(path, b"enabled-by-default\n");
                 }
-                Err(error) => eprintln!("默认启用登录自启失败：{error}"),
+                Err(error) => log::error!("默认启用登录自启失败：{error}"),
             }
         }
     }
@@ -492,7 +523,7 @@ fn toggle_autostart(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
             let _ = item.set_checked(next);
         }
         Err(error) => {
-            eprintln!("切换登录自启失败：{error}");
+            log::error!("切换登录自启失败：{error}");
             let _ = item.set_checked(!next);
         }
     }
@@ -529,6 +560,205 @@ fn begin_quit(app: AppHandle, state: Arc<Supervisor>) {
     });
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogPage {
+    page: u32,
+    page_size: u32,
+    max_pages: u32,
+    total_pages: u32,
+    total: u32,
+    lines: Vec<LogRow>,
+}
+
+#[derive(serde::Serialize)]
+struct LogRow {
+    ts: String,
+    level: String,
+    msg: String,
+}
+
+const LOG_PAGE_SIZE: usize = 50;
+const LOG_PAGE_SIZE_MAX: u32 = 200;
+const LOG_MAX_PAGES: usize = 20;
+const LOG_TAIL_BYTES: u64 = 2 * 1024 * 1024;
+
+#[tauri::command]
+fn read_logs(
+    app: AppHandle,
+    page: Option<u32>,
+    page_size: Option<u32>,
+    level: Option<String>,
+    query: Option<String>,
+) -> Result<LogPage, String> {
+    let mut rows = Vec::new();
+    if let Ok(dir) = desktop_data_dir(&app) {
+        push_log_rows(&mut rows, &dir.join("logs").join("agent.jsonl"));
+    }
+    if let Ok(dir) = app.path().app_log_dir() {
+        push_log_rows(&mut rows, &dir.join("host.log"));
+    }
+    page_log_rows(rows, page, page_size, level, query)
+}
+
+fn page_log_rows(
+    mut rows: Vec<LogRow>,
+    page: Option<u32>,
+    page_size: Option<u32>,
+    level: Option<String>,
+    query: Option<String>,
+) -> Result<LogPage, String> {
+    let size = page_size.unwrap_or(LOG_PAGE_SIZE as u32).clamp(1, LOG_PAGE_SIZE_MAX) as usize;
+    let wanted = level.unwrap_or_else(|| "all".into()).to_ascii_lowercase();
+    let needle = query.unwrap_or_default().trim().to_ascii_lowercase();
+    rows.retain(|row| {
+        (wanted == "all" || row.level == wanted)
+            && (needle.is_empty() || row.msg.to_ascii_lowercase().contains(&needle))
+    });
+    rows.sort_by(|left, right| match (left.ts.is_empty(), right.ts.is_empty()) {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => right.ts.cmp(&left.ts),
+    });
+    let window = LOG_PAGE_SIZE * LOG_MAX_PAGES;
+    rows.truncate(window);
+    let total = rows.len();
+    let total_pages = total.div_ceil(size).max(1);
+    let mut current = page.unwrap_or(1).max(1) as usize;
+    if current > total_pages {
+        current = total_pages;
+    }
+    let start = (current - 1) * size;
+    let lines = rows.into_iter().skip(start).take(size).collect();
+    Ok(LogPage {
+        page: current as u32,
+        page_size: size as u32,
+        max_pages: (LOG_PAGE_SIZE * LOG_MAX_PAGES).div_ceil(size) as u32,
+        total_pages: total_pages as u32,
+        total: total as u32,
+        lines,
+    })
+}
+
+fn push_log_rows(out: &mut Vec<LogRow>, path: &Path) {
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let start = len.saturating_sub(LOG_TAIL_BYTES);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return;
+    }
+    let mut text = String::new();
+    if file.read_to_string(&mut text).is_err() {
+        return;
+    }
+    let mut chunk: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    if start > 0 {
+        chunk.drain(..1.min(chunk.len()));
+    }
+    for line in chunk {
+        if let Some(row) = parse_log_line(line) {
+            out.push(row);
+        }
+    }
+}
+
+fn parse_log_line(line: &str) -> Option<LogRow> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+        if let Some(msg) = value
+            .get("msg")
+            .and_then(|item| item.as_str())
+            .or_else(|| value.get("message").and_then(|item| item.as_str()))
+        {
+            return Some(LogRow {
+                ts: value.get("ts").and_then(|item| item.as_str()).unwrap_or("").to_string(),
+                level: value
+                    .get("level")
+                    .and_then(|item| item.as_str())
+                    .unwrap_or("info")
+                    .to_ascii_lowercase(),
+                msg: msg.to_string(),
+            });
+        }
+    }
+    if let Some(row) = parse_host_line(line) {
+        return Some(row);
+    }
+    Some(LogRow {
+        ts: String::new(),
+        level: "info".into(),
+        msg: line.to_string(),
+    })
+}
+
+fn parse_host_line(line: &str) -> Option<LogRow> {
+    let rest = line.strip_prefix('[')?;
+    let (date, rest) = rest.split_once("][")?;
+    let (time, rest) = rest.split_once("][")?;
+    let (level, msg) = rest.split_once(']')?;
+    let level = level.trim().to_ascii_lowercase();
+    if !matches!(level.as_str(), "info" | "warn" | "error" | "debug" | "trace") {
+        return None;
+    }
+    Some(LogRow {
+        ts: format!("{date} {time}"),
+        level,
+        msg: msg.trim().to_string(),
+    })
+}
+
+#[tauri::command]
+fn restart_agent(app: AppHandle, state: tauri::State<'_, Arc<Supervisor>>) -> Result<(), String> {
+    restart_sidecar(&app, state.inner());
+    Ok(())
+}
+
+#[tauri::command]
+fn autostart_enabled(app: AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|error| error.to_string())?;
+    } else {
+        manager.disable().map_err(|error| error.to_string())?;
+    }
+    Ok(manager.is_enabled().unwrap_or(enabled))
+}
+
+#[tauri::command]
+fn open_log_dir(app: AppHandle) -> Result<(), String> {
+    let dir = desktop_data_dir(&app)?.join("logs");
+    fs::create_dir_all(&dir).map_err(|error| format!("无法创建日志目录：{error}"))?;
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&dir)
+            .spawn()
+            .map_err(|error| format!("无法打开日志目录：{error}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|error| format!("无法打开日志目录：{error}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|error| format!("无法打开日志目录：{error}"))?;
+    }
+    Ok(())
+}
+
 fn desktop_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("NOVOARD_DESKTOP_DATA_DIR") {
         return Ok(PathBuf::from(path));
@@ -545,14 +775,48 @@ mod tests {
     #[test]
     fn parses_ui_ready_event() {
         let event: HostEvent = serde_json::from_str(
-            r#"{"v":1,"type":"ui-ready","view":"panel","url":"http://127.0.0.1:1","panelUrl":"http://127.0.0.1:1","editorUrl":"http://127.0.0.1:1/editor"}"#,
+            r#"{"v":1,"type":"ui-ready","view":"panel","url":"http://127.0.0.1:1","panelUrl":"http://127.0.0.1:1"}"#,
         )
         .unwrap();
         assert_eq!(event.kind, "ui-ready");
         assert_eq!(event.view.as_deref(), Some("panel"));
-        assert_eq!(
-            event.editor_url.as_deref(),
-            Some("http://127.0.0.1:1/editor")
-        );
+        assert_eq!(event.panel_url.as_deref(), Some("http://127.0.0.1:1"));
+    }
+
+    #[test]
+    fn log_pages_stop_at_twenty_and_page_one_is_newest() {
+        let first = page_log_rows(
+            (0..1010)
+                .map(|index| LogRow {
+                    ts: format!("2026-01-01T00:00:00.{index:04}"),
+                    level: "info".into(),
+                    msg: format!("event {index}"),
+                })
+                .collect(),
+            Some(99),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.max_pages, 20);
+        assert_eq!(first.total_pages, 20);
+        assert_eq!(first.page, 20);
+        let newest = page_log_rows(
+            (0..1010)
+                .map(|index| LogRow {
+                    ts: format!("2026-01-01T00:00:00.{index:04}"),
+                    level: "info".into(),
+                    msg: format!("event {index}"),
+                })
+                .collect(),
+            Some(1),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(newest.lines[0].msg, "event 1009");
+        let host = parse_log_line("[2026-10-17][03:00:00][WARN] host line").unwrap();
+        assert_eq!(host.level, "warn");
+        assert_eq!(host.msg, "host line");
     }
 }

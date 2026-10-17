@@ -45,6 +45,19 @@
           "pattern": "^\\d+(s|m|h|d)$",
           "default": "30m",
           "description": "offline: queue 的等待上限，如 30m / 2h / 1d；到期未上线转 failed"
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32,
+          "default": 1,
+          "description": "这个快捷方式同时允许的运行数。1 表示不能重叠；隔离或可重复的任务再调高"
+        },
+        "timeout": {
+          "type": "string",
+          "pattern": "^\\d+(s|m|h|d)$",
+          "default": "10m",
+          "description": "单次运行上限，如 30s / 10m / 1h。到点会停掉这次运行"
         }
       },
       "additionalProperties": false

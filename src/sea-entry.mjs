@@ -16,8 +16,10 @@ import { spawn } from "node:child_process";
 import { EMBEDDED_SCHEMAS } from "../build/embedded-schemas.gen.mjs";
 import { loadAgentConfig } from "./config.mjs";
 import { createLiteAgent } from "./main.mjs";
+import { resolveConsoleRoot } from "./console-ui.mjs";
 import { createSetupWizard } from "./setup-wizard.mjs";
 import { createHostProtocol } from "./host-protocol.mjs";
+import { createFileLogger } from "./log.mjs";
 
 globalThis.__NOVOARD_EMBEDDED_SCHEMAS__ = EMBEDDED_SCHEMAS;
 
@@ -40,13 +42,8 @@ let setupWizard = null;
 let shuttingDown = null;
 let hostProtocol = null;
 
-/** 宿主模式 stdout 只留协议；人类日志统一送 stderr。 */
-const serviceLog = HOST_MODE
-  ? {
-      info: (...args) => console.error(...args),
-      error: (...args) => console.error(...args),
-    }
-  : console;
+/** 宿主模式 stdout 只留协议。日志进数据目录 logs/agent.jsonl，不镜像到控制台。 */
+const serviceLog = createFileLogger({ dir: DATA_DIR, mirrorStderr: !HOST_MODE });
 
 function emit(type, detail) {
   hostProtocol?.emit(type, detail);
@@ -110,15 +107,13 @@ async function bootAgent() {
   const panelPort = agent.localA2A.server.address().port;
   const panelHost = agent.config.uiHost.includes(":") ? `[${agent.config.uiHost}]` : agent.config.uiHost;
   const panelUrl = `http://${panelHost}:${panelPort}`;
-  const editorUrl = `${panelUrl}/editor`;
   serviceLog.info(`Novoard agent 已启动：${agent.config.agentId}`);
   serviceLog.info(`  hub: ${agent.config.hubUrl}`);
-  serviceLog.info(`  面板: ${panelUrl} · 编辑器: ${editorUrl}`);
+  serviceLog.info(`  控制台: ${panelUrl}`);
   emit("ui-ready", {
     view: "panel",
     url: panelUrl,
     panelUrl,
-    editorUrl,
     agentId: agent.config.agentId,
   });
   return agent;
@@ -142,6 +137,7 @@ async function main() {
       port: SETUP_PORT,
       host: UI_HOST,
       uiToken: UI_TOKEN,
+      uiRoot: resolveConsoleRoot(),
       onReady: bootAgent,
       log: serviceLog,
     });

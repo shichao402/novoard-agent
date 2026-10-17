@@ -1,0 +1,24 @@
+[[permission]]
+identifier = "allow-read-logs"
+description = "读取本机日志"
+commands.allow = ["read_logs"]
+
+[[permission]]
+identifier = "allow-restart-agent"
+description = "重启本机 Agent"
+commands.allow = ["restart_agent"]
+
+[[permission]]
+identifier = "allow-autostart-enabled"
+description = "读取登录时启动状态"
+commands.allow = ["autostart_enabled"]
+
+[[permission]]
+identifier = "allow-set-autostart"
+description = "设置登录时启动"
+commands.allow = ["set_autostart"]
+
+[[permission]]
+identifier = "allow-open-log-dir"
+description = "打开日志目录"
+commands.allow = ["open_log_dir"]
