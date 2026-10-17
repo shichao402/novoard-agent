@@ -36,13 +36,13 @@ Windows/macOS 的桌面部分是独立 Tauri 轻壳：它启动并监管内置 S
 
 ## Linux 无头使用
 
-直接运行发行 zip 中的 `novoard-agent`。无 `agent.json` 时会启动 `127.0.0.1:39870/setup`；已有配置后，控制台端口取 `localPort`，为 `0` 时由系统动态分配并打印到日志。浏览器打开这个地址，看到的是和 Windows / macOS 同一套控制台。
+直接运行发行 zip 中的 `novoard-agent`。正式版控制台固定在 `127.0.0.1:41783`，开发版固定在 `127.0.0.1:52641`。无 `agent.json` 时向导也占用同一端口；保存后向导退出，控制台接着听这个端口。两个版本可以同时开，不会抢端口。
 
 推荐通过 SSH 转发访问默认的回环地址：
 
 ```bash
-ssh -L 39870:127.0.0.1:39870 user@linux-host
-# 本机浏览器打开 http://127.0.0.1:39870/setup
+ssh -L 41783:127.0.0.1:41783 user@linux-host
+# 本机浏览器打开 http://127.0.0.1:41783/setup
 ```
 
 需要从其他机器或公网直接访问时，把监听地址配成非回环，并设置独立 UI Token：
@@ -50,11 +50,11 @@ ssh -L 39870:127.0.0.1:39870 user@linux-host
 ```bash
 NOVOARD_UI_HOST=0.0.0.0 \
 NOVOARD_UI_TOKEN='至少十六字符的独立凭据' \
-NOVOARD_LOCAL_PORT=39871 \
+NOVOARD_LOCAL_PORT=41783 \
 ./novoard-agent
 ```
 
-然后访问 `http://<主机>:39871/`，先用 UI Token 登录。`uiToken` 与 Hub Agent Token 相互独立；非回环监听缺少合格 token 时 Agent 会拒绝启动。这是明文 HTTP，公网使用时应放在自己的 TLS 反代后面。`uiHost`、`uiToken`、`localPort` 也可以写入权限为 `0600` 的本机 `agent.json`。
+然后访问 `http://<主机>:41783/`，先用 UI Token 登录。`uiToken` 与 Hub Agent Token 相互独立；非回环监听缺少合格 token 时 Agent 会拒绝启动。这是明文 HTTP，公网使用时应放在自己的 TLS 反代后面。`uiHost`、`uiToken` 也可以写入权限为 `0600` 的本机 `agent.json`。`localPort` 为 `0` 或未写时使用上面的固定端口；写成其他端口，或设置 `NOVOARD_LOCAL_PORT`，才会改掉它。桌面壳始终使用本版本的固定端口。
 
 target 定义位于 `agents/<agentId>/targets.yaml`；编辑器保存会先校验，再热替换 runtime、磁贴和 Hub card，不合法内容不会落盘。
 

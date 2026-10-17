@@ -9,6 +9,7 @@ export const edition = {
   "installDirName": "Novoard Agent",
   "mark": "N",
   "markTone": "accent",
+  "localPort": 41783,
   "icons": [
     "icons/32x32.png",
     "icons/128x128.png",

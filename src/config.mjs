@@ -5,7 +5,26 @@
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { edition } from "./edition.mjs";
 import { validateUiConfig } from "./ui-access.mjs";
+
+/** 向导端口。未显式指定时用本版本的固定端口，不再用 0 让系统随机分配。 */
+export function pinEditionListenPort(env = process.env) {
+  if (!env.NOVOARD_SETUP_PORT) env.NOVOARD_SETUP_PORT = String(edition.localPort);
+  return edition.localPort;
+}
+
+/**
+ * 控制台端口。环境变量优先；agent.json 里的 0 或空值回落到本版本的固定端口。
+ * 调用方必须在 createLiteAgent 之前执行，这样下一次读配置才会拿到固定端口。
+ */
+export function pinPanelPort(configuredPort, env = process.env) {
+  if (env.NOVOARD_LOCAL_PORT) return Number(env.NOVOARD_LOCAL_PORT);
+  const configured = Number(configuredPort);
+  if (Number.isInteger(configured) && configured > 0) return configured;
+  env.NOVOARD_LOCAL_PORT = String(edition.localPort);
+  return edition.localPort;
+}
 
 export function loadAgentConfig({ configPath, env = process.env } = {}) {
   const file = configPath ?? join(process.cwd(), "agent.json");

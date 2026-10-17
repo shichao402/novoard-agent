@@ -18,6 +18,7 @@ fn main() {
     let edition = editions
         .get(id)
         .unwrap_or_else(|| panic!("edition.json 缺少 {id}"));
+    let local_port = local_port(edition);
     let product_name = field(edition, "productName");
     let window_title = field(edition, "windowTitle");
     let identifier = field(edition, "identifier");
@@ -37,6 +38,7 @@ fn main() {
     println!("cargo:rustc-env=NOVOARD_PRODUCT_NAME={product_name}");
     println!("cargo:rustc-env=NOVOARD_WINDOW_TITLE={window_title}");
     println!("cargo:rustc-env=NOVOARD_IDENTIFIER={identifier}");
+    println!("cargo:rustc-env=NOVOARD_LOCAL_PORT={local_port}");
     println!(
         "cargo:rustc-env=NOVOARD_TRAY_ICON={}",
         tray_icon.display().to_string().replace('\\', "/")
@@ -52,6 +54,17 @@ fn main() {
     println!("cargo:rerun-if-changed={}", icon128.display());
 
     tauri_build::build()
+}
+
+fn local_port(edition: &serde_json::Value) -> u16 {
+    let port = edition
+        .get("localPort")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_else(|| panic!("edition.json 缺少 localPort"));
+    if !(10000..=65535).contains(&port) {
+        panic!("localPort 必须是 10000–65535 的固定端口，当前是 {port}");
+    }
+    port as u16
 }
 
 fn field(edition: &serde_json::Value, name: &str) -> String {

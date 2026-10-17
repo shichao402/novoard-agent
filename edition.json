@@ -9,6 +9,7 @@
     "installDirName": "Novoard Agent",
     "mark": "N",
     "markTone": "accent",
+    "localPort": 41783,
     "icons": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -27,6 +28,7 @@
     "installDirName": "Novoard AgentDev",
     "mark": "N",
     "markTone": "dev",
+    "localPort": 52641,
     "icons": [
       "icons/dev/32x32.png",
       "icons/dev/128x128.png",

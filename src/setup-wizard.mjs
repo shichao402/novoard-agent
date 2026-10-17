@@ -16,7 +16,7 @@ import { handleDesktopCors, sameOrigin } from "./local-a2a.mjs";
 import { createUiAccess, uiLoginPage, validateUiConfig } from "./ui-access.mjs";
 import { edition } from "./edition.mjs";
 
-const SETUP_PORT_DEFAULT = 39870;
+const SETUP_PORT_DEFAULT = edition.localPort;
 /** frame-agent-hello 的 agentId 同款约束（保持向导期就拦住不合法 ID） */
 const AGENT_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 

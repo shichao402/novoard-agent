@@ -150,7 +150,7 @@ async function inject() {
   const usage = targetPlatform === "linux"
     ? `无头使用：
 - 本目录就是数据目录（agent.json / agents/ / .agent-state/）
-- 未发现 agent.json 时启动 http://127.0.0.1:39870/setup
+- 未发现 agent.json 时启动 http://127.0.0.1:${resolveEdition().localPort}/setup
 - 推荐 SSH 转发访问。要对其他机器或公网开放，设置 NOVOARD_UI_HOST=0.0.0.0，并配置至少 16 字符的 NOVOARD_UI_TOKEN
 - 若本目录有 ui/，浏览器打开控制台地址即可使用和桌面端同一套界面
 `

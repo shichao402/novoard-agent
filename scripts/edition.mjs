@@ -27,6 +27,10 @@ export function resolveEdition(env = process.env) {
   const id = editionId(env);
   const edition = loadEditions()[id];
   if (!edition) throw new Error(`edition.json 缺少 ${id}`);
+  const port = edition.localPort;
+  if (!Number.isInteger(port) || port < 10000 || port > 65535) {
+    throw new Error(`${id} 的 localPort 必须是 10000–65535 的固定端口，当前是 ${port}`);
+  }
   return edition;
 }
 

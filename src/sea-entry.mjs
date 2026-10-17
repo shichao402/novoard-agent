@@ -14,7 +14,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { EMBEDDED_SCHEMAS } from "../build/embedded-schemas.gen.mjs";
-import { loadAgentConfig } from "./config.mjs";
+import { loadAgentConfig, pinEditionListenPort, pinPanelPort } from "./config.mjs";
 import { createLiteAgent } from "./main.mjs";
 import { resolveConsoleRoot } from "./console-ui.mjs";
 import { createSetupWizard } from "./setup-wizard.mjs";
@@ -25,7 +25,8 @@ globalThis.__NOVOARD_EMBEDDED_SCHEMAS__ = EMBEDDED_SCHEMAS;
 
 const HOST_MODE = process.env.NOVOARD_HOST_PROTOCOL === "ndjson";
 const DATA_DIR = resolve(process.env.NOVOARD_DATA_DIR || process.cwd());
-const SETUP_PORT = Number(process.env.NOVOARD_SETUP_PORT ?? (HOST_MODE ? 0 : 39870));
+pinEditionListenPort();
+const SETUP_PORT = Number(process.env.NOVOARD_SETUP_PORT);
 const UI_HOST = HOST_MODE ? "127.0.0.1" : String(process.env.NOVOARD_UI_HOST ?? "127.0.0.1");
 const UI_TOKEN = HOST_MODE ? "" : String(process.env.NOVOARD_UI_TOKEN ?? "");
 
@@ -93,6 +94,7 @@ async function bootAgent() {
   if (bootedAgent) return bootedAgent;
   const probe = loadAgentConfig({ configPath: join(DATA_DIR, "agent.json") });
   if (!probe.ok) throw new Error(probe.reason);
+  pinPanelPort(probe.localPort);
   const agent = await createLiteAgent({
     configPath: probe.file,
     agentDir: join(DATA_DIR, "agents", probe.agentId),

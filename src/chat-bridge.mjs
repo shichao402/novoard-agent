@@ -2,7 +2,7 @@
  * sidecar 与 CodeBuddy 会话进程之间的桥。
  * SEA 里没有 SDK 的 CLI 目录，所以会话交给系统 Node 跑 src/chat-worker.mjs。
  */
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,17 +37,21 @@ function plainWindowsPath(value) {
   return text;
 }
 
-export function locateNode() {
-  const fromEnv = process.env.NOVOARD_NODE;
+export function locateNode(env = process.env, options = {}) {
+  const executable = options.executable || process.execPath;
+  const fromEnv = env.NOVOARD_NODE;
   if (fromEnv && existsSync(fromEnv)) return fromEnv;
-  const base = basename(process.execPath).toLowerCase();
-  if (base === "node" || base === "node.exe") return process.execPath;
-  try {
-    const finder = process.platform === "win32" ? "where.exe" : "which";
-    const out = execFileSync(finder, ["node"], { encoding: "utf8" });
-    const found = out.split(/\r?\n/).map((line) => line.trim()).find((line) => line && existsSync(line) && !/windowsapps/i.test(line));
-    if (found) return found;
-  } catch { /* 没有系统 Node */ }
+  const base = basename(executable).toLowerCase();
+  if (base === "node" || base === "node.exe") return executable;
+  const pathValue = env.PATH || env.Path || "";
+  const names = process.platform === "win32" ? ["node.exe"] : ["node"];
+  for (const dir of pathValue.split(process.platform === "win32" ? ";" : ":")) {
+    if (!dir || /windowsapps/i.test(dir)) continue;
+    for (const name of names) {
+      const candidate = join(dir, name);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
   return null;
 }
 

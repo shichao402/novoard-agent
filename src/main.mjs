@@ -7,7 +7,7 @@
 import { mkdirSync, appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { loadAgentConfig } from "./config.mjs";
+import { loadAgentConfig, pinEditionListenPort, pinPanelPort } from "./config.mjs";
 import { loadTargets, expandSteps, deriveCard } from "./card.mjs";
 import { createAgentRuntime } from "./agent-runtime.mjs";
 import { createTunnelClient } from "./tunnel-client.mjs";
@@ -174,6 +174,9 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
 const TERMINAL_STATES_SET = new Set(["completed", "failed", "canceled", "rejected"]);
 
 export function main() {
+  pinEditionListenPort();
+  const probe = loadAgentConfig();
+  if (probe.ok) pinPanelPort(probe.localPort);
   createLiteAgent()
     .then((agent) => {
       console.log(`Novoard lite-agent 已启动：${agent.config.agentId}`);

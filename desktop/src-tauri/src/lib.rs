@@ -208,7 +208,8 @@ fn spawn_sidecar(app: AppHandle, state: Arc<Supervisor>) -> Result<(), String> {
         .env("NOVOARD_DATA_DIR", &data_dir)
         .env("NOVOARD_UI_HOST", "127.0.0.1")
         .env("NOVOARD_UI_TOKEN", "")
-        .env("NOVOARD_SETUP_PORT", "0");
+        .env("NOVOARD_SETUP_PORT", edition::LOCAL_PORT)
+        .env("NOVOARD_LOCAL_PORT", edition::LOCAL_PORT);
     let command = match chat_worker_path(&app) {
         Some(worker) => command.env("NOVOARD_CHAT_WORKER", worker),
         None => command,

@@ -1,5 +1,5 @@
 import { Plus, Square, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -110,6 +110,12 @@ export function ChatPage({ base }: { base: string }) {
   const end = messages.length - (safePage - 1) * Math.max(fit, 1);
   const visible = fit < 1 ? [] : messages.slice(Math.max(0, end - fit), end);
 
+  useLayoutEffect(() => {
+    const node = scroller.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [active, messages, visible.length]);
+
   async function start() {
     setError("");
     const created = await createSession(base);
@@ -207,7 +213,7 @@ export function ChatPage({ base }: { base: string }) {
               </div>
             </div>
           ) : (
-            <div className="w-max min-w-full">
+            <div className="w-full min-w-0">
               {visible.map((item) => (
                 <MessageView key={item.id} item={item} />
               ))}
@@ -280,17 +286,18 @@ function toBubble(event: ChatEvent): Bubble | null {
 }
 
 function MessageView({ item }: { item: Bubble }) {
+  const wrap = "whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
   if (item.role === "user") {
     return (
-      <div className="box-border flex h-8 w-max min-w-full items-center whitespace-nowrap px-4">
-        <span className="ml-auto rounded-2xl bg-accent px-3 text-sm leading-8 text-white">{item.text}</span>
+      <div className="flex w-full min-w-0 justify-end px-4 py-1">
+        <span className={`max-w-[85%] rounded-2xl bg-accent px-3 py-1.5 text-sm leading-6 text-white ${wrap}`}>{item.text}</span>
       </div>
     );
   }
   if (item.role === "tool") {
-    return <div className="box-border flex h-8 w-max min-w-full items-center whitespace-nowrap px-4 font-mono text-[11px] text-muted">{item.text}</div>;
+    return <div className={`w-full min-w-0 px-4 py-1.5 font-mono text-[11px] leading-5 text-muted ${wrap}`}>{item.text}</div>;
   }
-  if (item.role === "error") return <p className="box-border flex h-8 w-max min-w-full items-center whitespace-nowrap px-4 text-sm text-bad">{item.text}</p>;
-  if (item.role === "status") return <p className="box-border flex h-8 w-max min-w-full items-center whitespace-nowrap px-4 text-xs text-faint">{item.text}</p>;
-  return <div className="box-border flex h-8 w-max min-w-full items-center whitespace-nowrap px-4 text-sm text-ink">{item.text}</div>;
+  if (item.role === "error") return <p className={`w-full min-w-0 px-4 py-1.5 text-sm leading-6 text-bad ${wrap}`}>{item.text}</p>;
+  if (item.role === "status") return <p className={`w-full min-w-0 px-4 py-1.5 text-xs leading-5 text-faint ${wrap}`}>{item.text}</p>;
+  return <div className={`w-full min-w-0 px-4 py-1.5 text-sm leading-6 text-ink ${wrap}`}>{item.text}</div>;
 }

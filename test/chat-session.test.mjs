@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionStore } from "../src/session-store.mjs";
 import { explainAgentError, normalizeSdkMessage } from "../src/chat-events.mjs";
 import { dispatchNovoardTool } from "../src/novoard-tools.mjs";
-import { createChatBridge } from "../src/chat-bridge.mjs";
+import { createChatBridge, locateNode } from "../src/chat-bridge.mjs";
 import { createLocalA2A } from "../src/local-a2a.mjs";
 
 test("会话可以创建、追加、列出和删除", () => {
@@ -21,6 +21,26 @@ test("会话可以创建、追加、列出和删除", () => {
     store.remove("s1");
     assert.equal(store.list().length, 0);
     assert.equal(store.messages("s1").length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("打包后的 Agent 从 PATH 找 Node，不调用 where.exe", () => {
+  const dir = mkdtempSync(join(tmpdir(), "novoard-node-"));
+  try {
+    const store = join(dir, "WindowsApps");
+    const real = join(dir, "nodejs");
+    mkdirSync(store);
+    mkdirSync(real);
+    writeFileSync(join(store, "node.exe"), "");
+    writeFileSync(join(real, "node.exe"), "");
+    const found = locateNode(
+      { PATH: `${store};${real}` },
+      { executable: join(dir, "novoard-agent.exe") },
+    );
+    assert.equal(found, join(real, "node.exe"));
+    assert.equal(locateNode({ PATH: store }, { executable: join(dir, "novoard-agent.exe") }), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

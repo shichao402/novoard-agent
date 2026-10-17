@@ -5,6 +5,7 @@ pub const PRODUCT_NAME: &str = env!("NOVOARD_PRODUCT_NAME");
 pub const WINDOW_TITLE: &str = env!("NOVOARD_WINDOW_TITLE");
 #[allow(dead_code)]
 pub const IDENTIFIER: &str = env!("NOVOARD_IDENTIFIER");
+pub const LOCAL_PORT: &str = env!("NOVOARD_LOCAL_PORT");
 #[allow(dead_code)]
 pub const DEV: bool = cfg!(novoard_dev);
 pub const TRAY_ICON_PNG: &[u8] = include_bytes!(env!("NOVOARD_TRAY_ICON"));
