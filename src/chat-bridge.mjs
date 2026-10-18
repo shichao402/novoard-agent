@@ -93,7 +93,9 @@ export function createChatBridge({ dataDir, codebuddyFile, workerPath, nodePath,
       }
       const item = pending.get(payload.id);
       if (!item) continue;
-      if (payload.event) item.onEvent?.(payload.event);
+      if (payload.event) {
+        try { item.onEvent?.(payload.event); } catch { /* 页面已离开，会话仍要继续 */ }
+      }
       if (payload.error) {
         pending.delete(payload.id);
         item.reject(new Error(payload.error));
@@ -164,6 +166,12 @@ export function createChatBridge({ dataDir, codebuddyFile, workerPath, nodePath,
     create: (title) => request("create", { title }),
     remove: (sessionId) => request("delete", { sessionId }),
     interrupt: (sessionId) => request("interrupt", { sessionId }),
+    answer: (sessionId, payload = {}) => request("answer", {
+      sessionId,
+      questionId: payload.questionId,
+      answers: payload.answers,
+      skip: payload.skip === true,
+    }),
     doctor: () => request("doctor"),
     send: (sessionId, text, onEvent) => request("send", { sessionId, text }, onEvent),
     reload() {

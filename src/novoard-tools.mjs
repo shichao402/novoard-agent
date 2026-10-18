@@ -77,11 +77,41 @@ export async function dispatchNovoardTool(name, args, { origin, fetchImpl = glob
         jsonrpc: "2.0",
         id: `agent-${Date.now()}`,
         method: "message/send",
-        params: { message: { role: "user", parts: [{ kind: "text", text: input.id }] } },
+        params: { message: { role: "user", parts: [{ kind: "text", text: input.id }], metadata: input.forPeer ? { forPeer: true } : undefined } },
       }),
     });
     if (body.error) throw new Error(body.error.message || "A2A 拒绝了这次执行");
     return JSON.stringify({ taskId: body.result?.id, status: body.result?.status, via: "a2a" });
+  }
+  if (name === "novoard_ask_member") {
+    return JSON.stringify(await callJson(fetchImpl, origin, "/api/peer/ask", {
+      method: "POST",
+      body: JSON.stringify({ to: input.to, text: input.text }),
+    }));
+  }
+  if (name === "novoard_request_detail") {
+    return JSON.stringify(await callJson(fetchImpl, origin, "/api/peer/request", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }));
+  }
+  if (name === "novoard_report_result") {
+    return JSON.stringify(await callJson(fetchImpl, origin, "/api/peer/report", {
+      method: "POST",
+      body: JSON.stringify({ text: input.text }),
+    }));
+  }
+  if (name === "novoard_signal_presence") {
+    return JSON.stringify(await callJson(fetchImpl, origin, "/api/peer/presence", {
+      method: "POST",
+      body: JSON.stringify({ text: input.text ?? "" }),
+    }));
+  }
+  if (name === "novoard_notify_owner") {
+    return JSON.stringify(await callJson(fetchImpl, origin, "/api/peer/notify", {
+      method: "POST",
+      body: JSON.stringify({ text: input.text }),
+    }));
   }
   if (name === "novoard_recent_activity") {
     return JSON.stringify(await callJson(fetchImpl, origin, "/api/activity?limit=20"));

@@ -64,7 +64,7 @@ export function createTargetsStore({ agentDir, agentId, log = console } = {}) {
     if (!loaded.ok) return { ok: false, errors: [loaded.reason] };
     const expanded = expandSteps({ targets: loaded.targets, agentDir });
     if (!expanded.ok) return { ok: false, errors: [expanded.reason] };
-    const card = deriveCard({ agentId, targets: loaded.targets });
+    const card = deriveCard({ agentId, targets: loaded.targets, agentDir });
     log.info?.(`[editor] targets.yaml 已保存并重装载（${Object.keys(loaded.targets).length} 个 target）`);
     return { ok: true, raw: loaded.targets, expanded: expanded.targets, card };
   }

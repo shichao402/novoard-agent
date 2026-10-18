@@ -7,6 +7,10 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { parse } from "yaml";
 import { createFrameValidator } from "./contract/frames.mjs";
+import { loadProfile } from "./profile.mjs";
+
+/** 保留技能：表示这台机器能用自然语言和别的成员对话。不能被 Target 占用。 */
+export const CONVERSE_SKILL_ID = "converse";
 
 export function loadTargets({ agentDir, validate }) {
   const targetsPath = join(agentDir, "targets.yaml");
@@ -27,6 +31,9 @@ export function validateTargetsData(data, validate) {
   const validator = validate ?? createFrameValidator();
   if (!data || typeof data !== "object" || !data.targets) {
     return { ok: false, reason: "定义缺少顶层 targets 键", errors: ["缺少顶层 targets 键（targets: {...}）"] };
+  }
+  if (Object.prototype.hasOwnProperty.call(data.targets, CONVERSE_SKILL_ID)) {
+    return { ok: false, reason: "target id 不能占用 converse", errors: ["converse 是成员对话技能的保留 id"] };
   }
   const res = validator.targets(data);
   if (!res.ok) {
@@ -61,15 +68,28 @@ function expandedAll(out) {
   return Object.values(out).every((t) => Array.isArray(t.expanded) && t.expanded.length >= 1);
 }
 
-/** 从 targets 派生 Agent Card（契约 §2 生成规则；v1.1：offline 策略随 skill 透传）。 */
-export function deriveCard({ agentId, targets, description, version = "1.0.0" }) {
-  const skills = Object.entries(targets)
+/** 从自我介绍和 targets 派生 Agent Card。介绍给其他成员看；Target 只是其中的技能。 */
+export function deriveCard({ agentId, targets, agentDir, profile, description, version = "1.0.0" }) {
+  const intro = profile ?? (agentDir ? loadProfile(agentDir) : { role: "", introduction: "" });
+  const introduction = String(intro.introduction || description || `${agentId} 上的 Novoard agent`).trim();
+  const role = String(intro.role ?? "").trim();
+  const converseTags = ["novoard", "kind:agent"];
+  if (role) converseTags.push(`role:${role}`);
+  const skills = [
+    {
+      id: CONVERSE_SKILL_ID,
+      name: "对话",
+      description: introduction,
+      tags: converseTags,
+      "x-novoard-kind": "agent",
+    },
+    ...Object.entries(targets)
     .filter(([, t]) => t.expose === "a2a")
     .map(([id, t]) => {
       const skill = {
         id,
         name: t.title,
-        description: `${t.title}；vars: ${Object.keys(t.vars ?? {}).join(", ") || "无"}`,
+        description: capabilityText(t),
         tags: ["novoard"],
       };
       if (t.offline) {
@@ -79,14 +99,25 @@ export function deriveCard({ agentId, targets, description, version = "1.0.0" })
         skill["x-novoard-notify"] = t.notify; // M3 F2：通知策略透传（always/on-failure/never），hub 查表过滤终态通知
       }
       return skill;
-    });
-  return {
+    }),
+  ];
+  const card = {
     name: agentId,
-    description: description ?? `${agentId} · lite-agent`,
+    description: introduction,
     version,
     capabilities: { streaming: false, pushNotifications: true },
     defaultInputModes: ["text"],
     defaultOutputModes: ["text", "file"],
     skills,
   };
+  if (role) card["x-novoard-role"] = role;
+  return card;
+}
+
+function capabilityText(target) {
+  const title = String(target.title ?? "").trim();
+  const schedule = target.schedule ? `安排：${target.schedule}` : "";
+  const vars = Object.keys(target.vars ?? {});
+  const params = vars.length ? `参数：${vars.join("、")}` : "";
+  return [title, schedule, params].filter(Boolean).join("。");
 }

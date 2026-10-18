@@ -17,6 +17,7 @@ childProcess.spawn = function patchedSpawn(command, args, options = {}) {
 import { createSessionStore } from "./session-store.mjs";
 import { explainAgentError, normalizeSdkMessage } from "./chat-events.mjs";
 import { dispatchNovoardTool } from "./novoard-tools.mjs";
+import { createAskGate, formatAnswers, normalizeQuestions } from "./ask-user.mjs";
 import { codebuddySessionFields } from "./codebuddy-config.mjs";
 import { NOVOARD_SKILL } from "./novoard-skill.mjs";
 import { edition } from "./edition.mjs";
@@ -35,12 +36,28 @@ writeFileSync(join(agentHome, ".codebuddy", "skills", "novoard-agent", "SKILL.md
 const store = createSessionStore(sessionDir);
 const live = new Map();
 const queues = new Map();
+const holders = new Map();
+const inflight = new Map();
+const askGate = createAskGate();
+
+function holderFor(id) {
+  const existing = holders.get(id);
+  if (existing) return existing;
+  const holder = { id };
+  holders.set(id, holder);
+  return holder;
+}
+
+function publish(sessionId, requestId, event) {
+  if (sessionId) store.append(sessionId, event);
+  if (requestId != null) emit({ id: requestId, event });
+}
 
 function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
-function sessionOptions(sdk, sessionId) {
+function sessionOptions(sdk, holder) {
   const server = sdk.createSdkMcpServer({
     name: "novoard",
     version: "1.0.0",
@@ -53,13 +70,37 @@ function sessionOptions(sdk, sessionId) {
     permissionMode: "dontAsk",
     environment: auth.environment,
     ...(auth.model ? { model: auth.model } : {}),
-    canUseTool: async (toolName) => {
-      if (String(toolName).includes("novoard")) return { behavior: "allow" };
-      return { behavior: "allow" };
+    canUseTool: async (toolName, input, options) => {
+      if (toolName !== "AskUserQuestion") return { behavior: "allow" };
+      const sessionId = holder.id;
+      const questions = normalizeQuestions(input);
+      if (!questions.length) return { behavior: "deny", message: "问题格式不正确，没有可回答的题目。" };
+      const questionId = String(options?.toolUseID || `ask-${Date.now()}`);
+      const requestId = inflight.get(sessionId);
+      publish(sessionId, requestId, { kind: "question", questionId, questions });
+      let payload;
+      try {
+        payload = await askGate.wait(questionId, sessionId, questions, options?.signal);
+      } catch {
+        return { behavior: "deny", message: "提问已取消" };
+      }
+      const baseInput = input && typeof input === "object" ? input : {};
+      if (payload?.skip) {
+        publish(sessionId, requestId, { kind: "answer", questionId, skipped: true });
+        return { behavior: "allow", updatedInput: { ...baseInput, answers: { _action: "skip_question" } } };
+      }
+      let answers;
+      try {
+        answers = formatAnswers(questions, payload?.answers);
+      } catch (error) {
+        return { behavior: "deny", message: error instanceof Error ? error.message : "回答格式不正确" };
+      }
+      publish(sessionId, requestId, { kind: "answer", questionId, answers });
+      return { behavior: "allow", updatedInput: { ...baseInput, answers } };
     },
     persistSession: true,
     includePartialMessages: true,
-    sessionId,
+    sessionId: holder.id || undefined,
     mcpServers: { novoard: server },
     allowedTools: [
       "mcp__novoard__novoard_status",
@@ -69,6 +110,11 @@ function sessionOptions(sdk, sessionId) {
       "mcp__novoard__novoard_upsert_target",
       "mcp__novoard__novoard_delete_target",
       "mcp__novoard__novoard_run_target",
+      "mcp__novoard__novoard_ask_member",
+      "mcp__novoard__novoard_request_detail",
+      "mcp__novoard__novoard_report_result",
+      "mcp__novoard__novoard_signal_presence",
+      "mcp__novoard__novoard_notify_owner",
       "mcp__novoard__novoard_recent_activity",
       "mcp__novoard__novoard_tail_logs",
     ],
@@ -104,6 +150,21 @@ function toolDefs(sdk) {
     }],
     ["novoard_run_target", "通过本机 A2A message/send 执行一个 Target", {
       id: z.string().describe("Target id"),
+      forPeer: z.boolean().optional().describe("这次是替其他成员做的，完成后要向对方报告"),
+    }],
+    ["novoard_ask_member", "向另一个成员发自然语言，不指定 Target", {
+      to: z.string().describe("对方成员 id"),
+      text: z.string().describe("要问的话"),
+    }],
+    ["novoard_request_detail", "还缺关键信息。这条回复停在 input-required，等对方下一条消息，不要走脚本审批恢复", {}],
+    ["novoard_report_result", "把完成结果发回当前正在对话的成员", {
+      text: z.string().describe("结果说明"),
+    }],
+    ["novoard_signal_presence", "告诉当前成员主人已在这台电脑上", {
+      text: z.string().optional().describe("在场说明，可省略"),
+    }],
+    ["novoard_notify_owner", "请 Hub 把一句话发给主人", {
+      text: z.string().describe("要发给主人的话"),
     }],
     ["novoard_recent_activity", "读取最近的本机执行审计", {}],
     ["novoard_tail_logs", "读取最近的本机日志", {}],
@@ -140,8 +201,12 @@ function enqueue(sessionId, job) {
 
 async function openSession(sdk, id, resume) {
   if (live.has(id)) return live.get(id);
-  const session = resume ? sdk.resumeSession(id, sessionOptions(sdk, id)) : sdk.createSession(sessionOptions(sdk, id));
-  live.set(session.sessionId || id, session);
+  const holder = holderFor(id);
+  const session = resume ? sdk.resumeSession(id, sessionOptions(sdk, holder)) : sdk.createSession(sessionOptions(sdk, holder));
+  const sessionId = session.sessionId || id;
+  holder.id = sessionId;
+  holders.set(sessionId, holder);
+  live.set(sessionId, session);
   return session;
 }
 
@@ -183,6 +248,8 @@ async function handle(request) {
     return;
   }
   if (request.op === "delete") {
+    askGate.cancelSession(request.sessionId);
+    holders.delete(request.sessionId);
     const session = live.get(request.sessionId);
     live.delete(request.sessionId);
     try { session?.close(); } catch { /* 已关闭 */ }
@@ -191,8 +258,17 @@ async function handle(request) {
     return;
   }
   if (request.op === "interrupt") {
+    askGate.cancelSession(request.sessionId);
     await live.get(request.sessionId)?.interrupt();
     emit({ id, result: { ok: true } });
+    return;
+  }
+  if (request.op === "answer") {
+    const result = askGate.answer(String(request.questionId ?? ""), request.sessionId, {
+      skip: request.skip === true,
+      answers: request.answers,
+    });
+    emit({ id, result });
     return;
   }
   if (request.op === "doctor") {
@@ -229,8 +305,11 @@ async function handle(request) {
 
   const sdk = await loadSdk();
   if (request.op === "create") {
-    const session = sdk.createSession(sessionOptions(sdk));
+    const holder = { id: "" };
+    const session = sdk.createSession(sessionOptions(sdk, holder));
     const sessionId = session.sessionId;
+    holder.id = sessionId;
+    holders.set(sessionId, holder);
     live.set(sessionId, session);
     const now = new Date().toISOString();
     const entry = { id: sessionId, title: String(request.title || "新对话").slice(0, 80), createdAt: now, updatedAt: now, preview: "" };
@@ -255,9 +334,14 @@ async function handle(request) {
         preview: text.slice(0, 80),
         updatedAt: new Date().toISOString(),
       });
-      await session.send(text);
-      await consume(session, id);
-      emit({ id, result: { ok: true, session: store.get(request.sessionId) } });
+      inflight.set(request.sessionId, id);
+      try {
+        await session.send(text);
+        await consume(session, id);
+        emit({ id, result: { ok: true, session: store.get(request.sessionId) } });
+      } finally {
+        inflight.delete(request.sessionId);
+      }
     });
     return;
   }

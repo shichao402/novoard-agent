@@ -15,7 +15,25 @@ const PING_INTERVAL_MS = 25_000;
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 30_000;
 
-export function createTunnelClient({ config, card, targets, runner, stateDir, log = console, fetchImpl = fetch, onFatal } = {}) {
+function callerParts(parts, text) {
+  const outgoing = [];
+  for (const part of Array.isArray(parts) ? parts : []) {
+    if (!part || typeof part !== "object") continue;
+    if (part.kind === "text" && typeof part.text === "string") outgoing.push({ kind: "text", text: part.text });
+    else if (part.kind === "data" && part.data && typeof part.data === "object") outgoing.push({ kind: "data", data: part.data });
+    else if (part.kind === "file") {
+      const uri = typeof part.uri === "string" ? part.uri : part.file?.uri;
+      if (typeof uri === "string" && uri) {
+        const name = part.name || part.file?.name;
+        outgoing.push({ kind: "file", uri, ...(name ? { name } : {}) });
+      }
+    }
+  }
+  if (!outgoing.some((part) => part.kind === "text")) outgoing.unshift({ kind: "text", text: String(text ?? "") });
+  return outgoing;
+}
+
+export function createTunnelClient({ config, card, targets, runner, stateDir, log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice } = {}) {
   if (!config?.ok) throw new Error(`lite-agent 配置无效：${config?.reason}`);
   const { agentId, hubUrl, agentToken, contractVersion } = config;
   const hubHttpUrl = new URL(hubUrl);
@@ -75,6 +93,67 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
 
   function ops(body) {
     send({ v: 1, kind: "ops", msgId: newMsgId(), ts: new Date().toISOString(), body });
+  }
+
+  /** 把自然语言回复、完成报告或在场信号送回调用方。Hub 按任务上的调用方转发。 */
+  function replyToCaller({ taskId, to, text, state = "completed", parts, contextId }) {
+    if (!taskId || !to) return { ok: false, reason: "missing-caller" };
+    const outgoing = callerParts(parts, text);
+    uplink(taskId, {
+      jsonrpc: "2.0",
+      method: "message/notification",
+      params: {
+        message: {
+          messageId: `msg-${randomUUID().slice(0, 8)}`,
+          role: "agent",
+          parts: outgoing,
+          contextId: contextId || taskId,
+          taskId,
+          kind: "status-update",
+          metadata: { lane: "agent", to },
+          status: { state, message: String(text ?? ""), timestamp: new Date().toISOString() },
+        },
+      },
+    });
+    return { ok: true };
+  }
+
+  /** 向另一个成员发自然语言。from 由 Hub 按这条连接盖上。 */
+  function askMember({ to, text, contextId }) {
+    const target = String(to ?? "").trim();
+    const body = String(text ?? "").trim();
+    if (!target || !body) return { ok: false, reason: "empty" };
+    if (!registered) return { ok: false, reason: "not-registered" };
+    const taskId = `task-ask-${randomUUID().slice(0, 8)}`;
+    send({
+      v: 1,
+      kind: "a2a",
+      msgId: newMsgId(),
+      taskId,
+      ts: new Date().toISOString(),
+      body: {
+        jsonrpc: "2.0",
+        method: "message/send",
+        params: {
+          message: {
+            role: "user",
+            parts: [{ kind: "text", text: body }],
+            ...(contextId ? { contextId } : {}),
+            metadata: { lane: "agent", to: target },
+          },
+        },
+      },
+    });
+    return { ok: true, taskId };
+  }
+
+  /** 请 Hub 把一句话发给主人（企微）。发送动作在 Hub，本成员只提出请求。 */
+  function notifyOwner(text) {
+    const body = String(text ?? "").trim();
+    if (!body) return { ok: false, reason: "empty" };
+    if (!registered) return { ok: false, reason: "not-registered" };
+    ops({ type: "notify.owner", text: body });
+    return { ok: true };
   }
 
   /** card.update 上行（editor 保存路径）：帧结构按 frame-card-update schema（type + card）。 */
@@ -213,8 +292,38 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
       }
       return;
     }
+    if (body?.method === "message/notification") {
+      const notice = body.params?.message ?? {};
+      if (notice.metadata?.lane !== "agent") return;
+      const text = notice.status?.message || firstText(notice.parts);
+      Promise.resolve(onAgentNotice?.({
+        from: String(notice.metadata.from ?? ""),
+        taskId: env.taskId,
+        contextId: notice.contextId || env.taskId,
+        text,
+        state: notice.status?.state ?? "",
+        parts: Array.isArray(notice.parts) ? notice.parts : [],
+      })).catch((error) => {
+        log.error?.(`[peer] 记录对方回复失败：${error?.message ?? error}`);
+      });
+      return;
+    }
     if (body?.method !== "message/send") return;
     const message = body.params?.message ?? {};
+    if (message.metadata?.lane === "agent") {
+      const text = firstText(message.parts);
+      Promise.resolve(onAgentMessage?.({
+        from: String(message.metadata.from ?? ""),
+        taskId: env.taskId,
+        contextId: message.contextId || env.taskId,
+        text,
+        parts: Array.isArray(message.parts) ? message.parts : [],
+      })).catch((error) => {
+        log.error?.(`[peer] 处理成员消息失败：${error?.message ?? error}`);
+        uplink(env.taskId, statusNotification(env.taskId, "failed", `成员消息处理失败：${error?.message ?? error}`));
+      });
+      return;
+    }
     const text = firstText(message.parts);
     const parsed = parseTriggerText(text);
     if (!parsed) {
@@ -307,7 +416,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
     });
   }
 
-  return { start, uplink, uplinkTerminal, uploadArtifact, ops, sendCardUpdate, replaceTargets, replaceCard, close, get connected() { return connected; }, get registered() { return registered; } };
+  return { start, uplink, uplinkTerminal, uploadArtifact, ops, sendCardUpdate, replyToCaller, askMember, notifyOwner, replaceTargets, replaceCard, close, get connected() { return connected; }, get registered() { return registered; } };
 }
 
 const TERMINAL_OK = new Set(["completed", "failed", "canceled"]);

@@ -55,6 +55,11 @@ test("SDK 消息收成界面事件", () => {
   });
   assert.equal(assistant[0].kind, "assistant");
   assert.equal(assistant[1].name, "novoard_run_target");
+  const ask = normalizeSdkMessage({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", name: "AskUserQuestion", input: { questions: [] } }] },
+  });
+  assert.equal(ask.length, 0);
   const done = normalizeSdkMessage({ type: "result", subtype: "error_during_execution", errors: ["未登录"] });
   assert.equal(done[0].ok, false);
   assert.match(explainAgentError(new Error("CodeBuddy CLI not found")), /没有找到 CodeBuddy/);

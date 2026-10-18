@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { getCodebuddy, getSettings, saveCodebuddy, saveSettings, testHub, type CodebuddySettings } from "@/lib/api";
+import { getCodebuddy, getProfile, getSettings, saveCodebuddy, saveProfile, saveSettings, testHub, type CodebuddySettings } from "@/lib/api";
 import { hubLabel } from "@/lib/utils";
 
 export function SettingsPage({ base, onRestart }: { base: string; onRestart: () => void }) {
@@ -20,6 +20,10 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
   const [tone, setTone] = useState<"info" | "ok" | "err">("info");
   const [modelStatus, setModelStatus] = useState("");
   const [modelTone, setModelTone] = useState<"info" | "ok" | "err">("info");
+  const [role, setRole] = useState("");
+  const [introduction, setIntroduction] = useState("");
+  const [profileStatus, setProfileStatus] = useState("");
+  const [profileTone, setProfileTone] = useState<"info" | "ok" | "err">("info");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -44,6 +48,15 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
       })
       .catch(() => {
         if (!cancelled) setHasApiKey(false);
+      });
+    getProfile(base)
+      .then((value) => {
+        if (cancelled) return;
+        setRole(value.role);
+        setIntroduction(value.introduction);
+      })
+      .catch(() => {
+        if (!cancelled) setIntroduction("");
       });
     invoke<boolean>("autostart_enabled").then(setAutostart).catch(() => setAutostart(false));
     return () => {
@@ -86,6 +99,22 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
     }
   }
 
+  async function saveIntroduction() {
+    setBusy(true);
+    setProfileTone("info");
+    setProfileStatus("正在保存自我介绍…");
+    try {
+      await saveProfile(base, { role, introduction });
+      setProfileTone("ok");
+      setProfileStatus("已保存，并推给 Hub。其他成员可以按角色标签找到这台电脑。");
+    } catch (caught) {
+      setProfileTone("err");
+      setProfileStatus(caught instanceof Error ? caught.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveModel() {
     setBusy(true);
     setModelTone("info");
@@ -122,6 +151,21 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
           <Button variant="accent" disabled={busy} onClick={() => void save()}>保存并重新连接</Button>
         </div>
         {status ? <p className={`text-xs leading-5 ${tone === "ok" ? "text-good" : tone === "err" ? "text-bad" : "text-muted"}`}>{status}</p> : null}
+      </section>
+      <section className="space-y-3 rounded-2xl border border-line bg-panel p-5">
+        <h2 className="text-sm font-medium">给其他成员的介绍</h2>
+        <Field label="角色标签" hint="稳定短名，例如 office-pc。智脑按这个标签找出办公电脑。">
+          <Input value={role} onChange={(event) => setRole(event.target.value)} placeholder="office-pc" spellCheck={false} />
+        </Field>
+        <Field label="自我介绍" hint="写给其他 agent：这台机器是谁的、平时负责什么。">
+          <textarea
+            value={introduction}
+            onChange={(event) => setIntroduction(event.target.value)}
+            className="min-h-20 w-full rounded-lg border border-line-hi bg-surface px-3 py-2 text-[13px] outline-none focus:border-accent"
+          />
+        </Field>
+        <Button variant="accent" disabled={busy} onClick={() => void saveIntroduction()}>保存介绍</Button>
+        {profileStatus ? <p className={`text-xs leading-5 ${profileTone === "ok" ? "text-good" : profileTone === "err" ? "text-bad" : "text-muted"}`}>{profileStatus}</p> : null}
       </section>
       <section className="space-y-3 rounded-2xl border border-line bg-panel p-5">
         <h2 className="text-sm font-medium">CodeBuddy</h2>

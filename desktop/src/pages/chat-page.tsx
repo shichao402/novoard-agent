@@ -1,25 +1,41 @@
 import { Plus, Square, Trash2 } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   agentDoctor,
   createSession,
   deleteSession,
+  answerQuestion,
   interruptSession,
   listSessions,
   sendMessage,
   sessionHistory,
+  subscribeSessions,
+  type AskQuestion,
   type ChatEvent,
   type ChatSession,
 } from "@/lib/api";
+import { prefixHeights, resolveWindow } from "@/lib/sliding-window.mjs";
 
-type Bubble = { id: string; role: "user" | "assistant" | "tool" | "error" | "status"; text: string };
+type TextBubble = { id: string; role: "user" | "assistant" | "tool" | "error" | "status"; text: string };
+type QuestionBubble = {
+  id: string;
+  role: "question";
+  questionId: string;
+  questions: AskQuestion[];
+  answers?: Record<string, string>;
+  skipped?: boolean;
+  pending: boolean;
+  live: boolean;
+};
+type Bubble = TextBubble | QuestionBubble;
+type Slice = { start: number; end: number };
 
-const ROW_PX = 32;
+const PIN_SLOP_PX = 64;
 
 let bubbleSeq = 0;
-function bubble(role: Bubble["role"], text: string): Bubble {
+function bubble(role: TextBubble["role"], text: string): TextBubble {
   bubbleSeq += 1;
   return { id: `${role}-${bubbleSeq}`, role, text };
 }
@@ -33,10 +49,8 @@ export function ChatPage({ base }: { base: string }) {
   const [error, setError] = useState("");
   const [doctor, setDoctor] = useState("");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
-  const scroller = useRef<HTMLDivElement>(null);
   const streamingRef = useRef(false);
-  const [page, setPage] = useState(1);
-  const [fit, setFit] = useState(0);
+  const activeRef = useRef<string | null>(null);
 
   async function refresh(selectId?: string) {
     const body = await listSessions(base);
@@ -75,46 +89,54 @@ export function ChatPage({ base }: { base: string }) {
     void sessionHistory(base, active)
       .then((body) => {
         if (cancelled || streamingRef.current) return;
-        setMessages(body.messages.map((event) => toBubble(event)).filter((item): item is Bubble => Boolean(item)));
+        setMessages(eventsToBubbles(body.messages));
       })
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "无法读取记录"));
     return () => { cancelled = true; };
   }, [active, base]);
 
   useEffect(() => {
-    setPage(1);
+    activeRef.current = active;
   }, [active]);
 
   useEffect(() => {
-    const node = scroller.current;
-    if (!node) return;
-    let timer = 0;
-    const measure = () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        const next = Math.max(1, Math.floor(node.clientHeight / ROW_PX));
-        setFit((current) => (current === next ? current : next));
-      }, 80);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => {
-      window.clearTimeout(timer);
-      observer.disconnect();
-    };
-  }, []);
+    return subscribeSessions(base, (event) => {
+      if (event.kind === "session" && event.session) {
+        setSessions((current) => [event.session!, ...current.filter((item) => item.id !== event.session!.id)]);
+        if (event.focus) {
+          activeRef.current = event.session.id;
+          setActive(event.session.id);
+        }
+        return;
+      }
+      if (event.kind === "message" && event.sessionId && event.sessionId === activeRef.current && event.event) {
+        const next = toBubble(event.event);
+        if (next) setMessages((current) => [...current, next]);
+      }
+    });
+  }, [base]);
 
-  const totalPages = Math.max(1, Math.ceil(messages.length / Math.max(fit, 1)));
-  const safePage = Math.min(page, totalPages);
-  const end = messages.length - (safePage - 1) * Math.max(fit, 1);
-  const visible = fit < 1 ? [] : messages.slice(Math.max(0, end - fit), end);
+  useEffect(() => {
+    if (streaming) return;
+    setMessages((current) => {
+      if (!current.some((item) => item.role === "question" && item.pending && item.live)) return current;
+      return current.map((item) => (
+        item.role === "question" && item.pending && item.live
+          ? { ...item, pending: false, live: false, skipped: true }
+          : item
+      ));
+    });
+  }, [streaming]);
 
-  useLayoutEffect(() => {
-    const node = scroller.current;
-    if (!node) return;
-    node.scrollTop = node.scrollHeight;
-  }, [active, messages, visible.length]);
+  async function submitAnswer(questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) {
+    if (!active) throw new Error("没有正在进行的会话");
+    await answerQuestion(base, active, questionId, body);
+    setMessages((current) => current.map((item) => (
+      item.role === "question" && item.questionId === questionId
+        ? { ...item, pending: false, live: false, skipped: Boolean(body.skip), answers: body.answers }
+        : item
+    )));
+  }
 
   async function start() {
     setError("");
@@ -147,15 +169,30 @@ export function ChatPage({ base }: { base: string }) {
               assistantId = next.id;
               return [...current, next];
             }
-            return current.map((item) => (item.id === assistantId ? { ...item, text: item.text + (event.text ?? "") } : item));
+            return current.map((item) => (item.id === assistantId && item.role === "assistant" ? { ...item, text: item.text + (event.text ?? "") } : item));
           });
           return;
         }
         if (event.kind === "assistant" && event.text) {
           setMessages((current) => {
             if (!assistantId) return [...current, bubble("assistant", event.text || "")];
-            return current.map((item) => (item.id === assistantId ? { ...item, text: event.text || item.text } : item));
+            return current.map((item) => (item.id === assistantId && item.role === "assistant" ? { ...item, text: event.text || item.text } : item));
           });
+          return;
+        }
+        if (event.kind === "question" && event.questionId) {
+          setMessages((current) => {
+            if (current.some((item) => item.role === "question" && item.questionId === event.questionId)) return current;
+            return [...current, questionBubble(event, true)];
+          });
+          return;
+        }
+        if (event.kind === "answer" && event.questionId) {
+          setMessages((current) => current.map((item) => (
+            item.role === "question" && item.questionId === event.questionId
+              ? { ...item, pending: false, live: false, answers: event.answers, skipped: Boolean(event.skipped) }
+              : item
+          )));
           return;
         }
         const next = toBubble(event);
@@ -204,31 +241,7 @@ export function ChatPage({ base }: { base: string }) {
             <Trash2 size={14} />删除
           </Button>
         </div>
-        <div ref={scroller} className="min-h-0 min-w-0 flex-1 overflow-auto">
-          {messages.length === 0 ? (
-            <div className="grid h-full place-items-center px-4 text-center">
-              <div>
-                <p className="text-sm text-ink">这个 Agent 可以配置自己，并通过 A2A 执行 Target。</p>
-                <p className="mt-2 text-xs text-faint">试试「列出这台电脑上的 Target」或「跑一次冒烟自检」。</p>
-              </div>
-            </div>
-          ) : (
-            <div className="w-full min-w-0">
-              {visible.map((item) => (
-                <MessageView key={item.id} item={item} />
-              ))}
-            </div>
-          )}
-        </div>
-        {messages.length > 0 ? (
-          <div className="flex items-center justify-between border-t border-line px-4 py-2 text-xs text-muted">
-            <span>第 {safePage} / {totalPages} 页 · 每页 {fit || 1} 条</span>
-            <div className="flex gap-2">
-              <Button variant="secondary" size="sm" disabled={safePage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>较新</Button>
-              <Button variant="secondary" size="sm" disabled={safePage >= totalPages} onClick={() => setPage((value) => value + 1)}>较旧</Button>
-            </div>
-          </div>
-        ) : null}
+        <MessageScroller messages={messages} resetKey={active} onAnswer={submitAnswer} />
         {error ? <p className="px-4 pb-2 text-xs leading-5 text-bad" role="alert">{error}</p> : null}
         <form
           className="flex items-end gap-2 border-t border-line p-3"
@@ -274,9 +287,203 @@ export function ChatPage({ base }: { base: string }) {
   );
 }
 
-function toBubble(event: ChatEvent): Bubble | null {
+function MessageScroller({
+  messages,
+  resetKey,
+  onAnswer,
+}: {
+  messages: Bubble[];
+  resetKey: string | null;
+  onAnswer: (questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) => Promise<void>;
+}) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const rowEls = useRef(new Map<string, HTMLDivElement>());
+  const rowRefs = useRef(new Map<string, (el: HTMLDivElement | null) => void>());
+  const heightById = useRef(new Map<string, number>());
+  const pinnedRef = useRef(true);
+  const scrollTopRef = useRef(0);
+  const anchorRef = useRef<{ id: string; offset: number } | null>(null);
+  const ignoreScroll = useRef(false);
+  const seenKey = useRef(resetKey);
+  const [viewport, setViewport] = useState(0);
+  const [epoch, setEpoch] = useState(0);
+  const [slice, setSlice] = useState<Slice>({ start: 0, end: 0 });
+
+  if (seenKey.current !== resetKey) {
+    seenKey.current = resetKey;
+    pinnedRef.current = true;
+    anchorRef.current = null;
+    scrollTopRef.current = 0;
+  }
+
+  const prefix = useMemo(() => {
+    const live = new Set(messages.map((item) => item.id));
+    if (heightById.current.size > live.size) {
+      for (const id of heightById.current.keys()) {
+        if (!live.has(id)) heightById.current.delete(id);
+      }
+    }
+    return prefixHeights(messages.map((item) => heightById.current.get(item.id) ?? 0));
+  }, [messages, epoch]);
+
+  const viewportPx = scrollerRef.current?.clientHeight || viewport || 640;
+  const total = prefix[messages.length] ?? 0;
+  const scrollTop = pinnedRef.current
+    ? Math.max(0, total - viewportPx)
+    : Math.min(scrollTopRef.current, Math.max(0, total - viewportPx));
+  const view = resolveWindow(prefix, scrollTop, viewportPx, slice);
+  if (view.start !== slice.start || view.end !== slice.end) setSlice(view);
+
+  useEffect(() => {
+    const node = scrollerRef.current;
+    if (!node) return;
+    const apply = () => {
+      const next = node.clientHeight;
+      setViewport((current) => (current === next ? current : next));
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const node = scrollerRef.current;
+    if (!node || messages.length === 0 || node.clientHeight < 1) return;
+    if (Math.abs(node.clientHeight - viewport) > 1) {
+      setViewport(node.clientHeight);
+      return;
+    }
+
+    const nodeTop = node.getBoundingClientRect().top;
+    if (anchorRef.current) {
+      const anchor = anchorRef.current;
+      anchorRef.current = null;
+      const el = rowEls.current.get(anchor.id);
+      if (el) {
+        const delta = anchor.offset - (nodeTop - el.getBoundingClientRect().top);
+        if (Math.abs(delta) > 1) {
+          ignoreScroll.current = true;
+          node.scrollTop += delta;
+          scrollTopRef.current = node.scrollTop;
+        }
+      } else {
+        const index = messages.findIndex((item) => item.id === anchor.id);
+        if (index >= 0) {
+          ignoreScroll.current = true;
+          node.scrollTop = prefix[index] + anchor.offset;
+          scrollTopRef.current = node.scrollTop;
+        }
+      }
+    }
+
+    let changed = false;
+    for (let index = view.start; index < view.end; index += 1) {
+      const item = messages[index];
+      const el = item ? rowEls.current.get(item.id) : undefined;
+      if (!item || !el) continue;
+      const height = el.offsetHeight;
+      if (height < 1 || heightById.current.get(item.id) === height) continue;
+      if (!changed && !pinnedRef.current) {
+        const top = node.getBoundingClientRect().top;
+        for (let cursor = view.start; cursor < view.end; cursor += 1) {
+          const id = messages[cursor]?.id;
+          const row = id ? rowEls.current.get(id) : undefined;
+          if (!row || !id) continue;
+          const rect = row.getBoundingClientRect();
+          if (rect.bottom > top + 1) {
+            anchorRef.current = { id, offset: top - rect.top };
+            break;
+          }
+        }
+      }
+      heightById.current.set(item.id, height);
+      changed = true;
+    }
+    if (changed) {
+      setEpoch((value) => value + 1);
+      return;
+    }
+
+    if (pinnedRef.current) {
+      const target = Math.max(0, node.scrollHeight - node.clientHeight);
+      if (Math.abs(node.scrollTop - target) > 1) {
+        ignoreScroll.current = true;
+        node.scrollTop = target;
+        scrollTopRef.current = node.scrollTop;
+      }
+    }
+  }, [messages, epoch, viewport, view.start, view.end, prefix, resetKey]);
+
+  function rowRef(id: string) {
+    let callback = rowRefs.current.get(id);
+    if (!callback) {
+      callback = (el) => {
+        if (el) rowEls.current.set(id, el);
+        else rowEls.current.delete(id);
+      };
+      rowRefs.current.set(id, callback);
+    }
+    return callback;
+  }
+
+  function onScroll() {
+    const node = scrollerRef.current;
+    if (!node) return;
+    const ignored = ignoreScroll.current;
+    ignoreScroll.current = false;
+    const gap = node.scrollHeight - node.scrollTop - node.clientHeight;
+    if (!ignored) {
+      const movedUp = node.scrollTop < scrollTopRef.current - 1;
+      if (gap < 2) pinnedRef.current = true;
+      else if (gap >= PIN_SLOP_PX || movedUp) pinnedRef.current = false;
+    }
+    scrollTopRef.current = node.scrollTop;
+    const top = pinnedRef.current ? Math.max(0, total - node.clientHeight) : node.scrollTop;
+    const next = resolveWindow(prefix, top, node.clientHeight || viewportPx, slice);
+    if (next.start !== slice.start || next.end !== slice.end) setSlice(next);
+  }
+
+  return (
+    <div
+      ref={scrollerRef}
+      className="min-h-0 min-w-0 flex-1 overflow-auto"
+      style={{ overflowAnchor: "none", scrollbarGutter: "stable" }}
+      onScroll={onScroll}
+      data-slide-start={view.start}
+      data-slide-end={view.end}
+      data-slide-count={messages.length}
+    >
+      {messages.length === 0 ? (
+        <div className="grid h-full place-items-center px-4 text-center">
+          <div>
+            <p className="text-sm text-ink">这个 Agent 可以配置自己，并通过 A2A 执行 Target。</p>
+            <p className="mt-2 text-xs text-faint">试试「列出这台电脑上的 Target」或「跑一次冒烟自检」。</p>
+          </div>
+        </div>
+      ) : (
+        <div className="relative w-full min-w-0" style={{ height: total }}>
+          {messages.slice(view.start, view.end).map((item, offset) => (
+            <div
+              key={item.id}
+              ref={rowRef(item.id)}
+              className="absolute left-0 w-full min-w-0"
+              style={{ top: prefix[view.start + offset] }}
+            >
+              <MessageView item={item} onAnswer={onAnswer} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function toBubble(event: ChatEvent): TextBubble | null {
+  if (event.kind === "peer" && event.text) return bubble("user", event.from ? `${event.from}：${event.text}` : event.text);
   if (event.kind === "user" && event.text) return bubble("user", event.text);
   if (event.kind === "assistant" && event.text) return bubble("assistant", event.text);
+  if (event.kind === "tool" && event.name === "AskUserQuestion") return null;
   if (event.kind === "tool") return bubble("tool", event.name || "工具");
   if (event.kind === "tool_result" && event.text) return bubble("tool", event.text);
   if (event.kind === "error" && event.text) return bubble("error", event.text);
@@ -285,7 +492,44 @@ function toBubble(event: ChatEvent): Bubble | null {
   return null;
 }
 
-function MessageView({ item }: { item: Bubble }) {
+function eventsToBubbles(events: ChatEvent[]): Bubble[] {
+  const bubbles: Bubble[] = [];
+  const byQuestion = new Map<string, QuestionBubble>();
+  for (const event of events) {
+    if (event.kind === "question" && event.questionId) {
+      const item = questionBubble(event, false);
+      byQuestion.set(event.questionId, item);
+      bubbles.push(item);
+      continue;
+    }
+    if (event.kind === "answer" && event.questionId) {
+      const item = byQuestion.get(event.questionId);
+      if (item) {
+        item.pending = false;
+        item.answers = event.answers;
+        item.skipped = Boolean(event.skipped);
+      }
+      continue;
+    }
+    const next = toBubble(event);
+    if (next) bubbles.push(next);
+  }
+  return bubbles;
+}
+
+function questionBubble(event: ChatEvent, live: boolean): QuestionBubble {
+  return {
+    id: `question-${event.questionId}`,
+    role: "question",
+    questionId: event.questionId || "",
+    questions: event.questions ?? [],
+    pending: true,
+    live,
+  };
+}
+
+function MessageView({ item, onAnswer }: { item: Bubble; onAnswer: (questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) => Promise<void> }) {
+  if (item.role === "question") return <QuestionCard item={item} onAnswer={onAnswer} />;
   const wrap = "whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
   if (item.role === "user") {
     return (
@@ -300,4 +544,140 @@ function MessageView({ item }: { item: Bubble }) {
   if (item.role === "error") return <p className={`w-full min-w-0 px-4 py-1.5 text-sm leading-6 text-bad ${wrap}`}>{item.text}</p>;
   if (item.role === "status") return <p className={`w-full min-w-0 px-4 py-1.5 text-xs leading-5 text-faint ${wrap}`}>{item.text}</p>;
   return <div className={`w-full min-w-0 px-4 py-1.5 text-sm leading-6 text-ink ${wrap}`}>{item.text}</div>;
+}
+
+function composeAnswers(questions: AskQuestion[], picked: Record<string, string[]>, other: Record<string, string>) {
+  const answers: Record<string, string> = {};
+  for (const question of questions) {
+    const labels = picked[question.question] ?? [];
+    const custom = (other[question.question] ?? "").trim();
+    if (question.multiSelect) {
+      const parts = custom ? [...labels, custom] : labels;
+      if (!parts.length) return "还有题目没选";
+      answers[question.question] = parts.join(", ");
+      continue;
+    }
+    if (custom) {
+      answers[question.question] = custom;
+      continue;
+    }
+    if (labels.length === 1) {
+      answers[question.question] = labels[0];
+      continue;
+    }
+    return "还有题目没选";
+  }
+  return answers;
+}
+
+function QuestionCard({
+  item,
+  onAnswer,
+}: {
+  item: QuestionBubble;
+  onAnswer: (questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) => Promise<void>;
+}) {
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const [other, setOther] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const closed = !item.pending || Boolean(note);
+
+  async function submit(skip: boolean) {
+    if (submitting) return;
+    setError("");
+    let answers: Record<string, string> | undefined;
+    if (!skip) {
+      const composed = composeAnswers(item.questions, picked, other);
+      if (typeof composed === "string") {
+        setError(composed);
+        return;
+      }
+      answers = composed;
+    }
+    setSubmitting(true);
+    try {
+      await onAnswer(item.questionId, skip ? { skip: true } : { answers });
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "提交失败";
+      if (message.includes("已经结束")) setNote("这次提问已经结束");
+      else setError(message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (closed) {
+    return (
+      <div className="mx-4 my-2 rounded-xl border border-line bg-surface px-3 py-2">
+        {item.questions.map((question) => (
+          <div key={question.question} className="py-1.5">
+            <div className="text-[11px] text-faint">{question.header}</div>
+            <div className="text-sm leading-6 text-ink">{question.question}</div>
+            <div className="text-xs leading-5 text-muted">
+              {note || (item.skipped ? "已跳过" : item.answers?.[question.question] || "未回答")}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-4 my-2 rounded-xl border border-accent/50 bg-surface px-3 py-3">
+      {item.questions.map((question) => {
+        const selected = picked[question.question] ?? [];
+        return (
+          <fieldset key={question.question} className="mb-3 min-w-0 border-0 p-0">
+            <legend className="mb-1 text-[11px] text-faint">{question.header}{question.multiSelect ? " · 可多选" : ""}</legend>
+            <div className="text-sm leading-6 text-ink">{question.question}</div>
+            <div className="mt-2 flex flex-col gap-1.5">
+              {question.options.map((option) => {
+                const on = selected.includes(option.label);
+                return (
+                  <button
+                    key={option.label}
+                    type="button"
+                    aria-pressed={on}
+                    disabled={submitting}
+                    className={`rounded-lg border px-3 py-1.5 text-left ${on ? "border-accent bg-accent/15" : "border-line-hi hover:bg-panel-hi"}`}
+                    onClick={() => {
+                      setPicked((current) => {
+                        const labels = current[question.question] ?? [];
+                        const next = question.multiSelect
+                          ? (labels.includes(option.label) ? labels.filter((label) => label !== option.label) : [...labels, option.label])
+                          : (labels.length === 1 && labels[0] === option.label ? [] : [option.label]);
+                        return { ...current, [question.question]: next };
+                      });
+                      if (!question.multiSelect) setOther((current) => ({ ...current, [question.question]: "" }));
+                    }}
+                  >
+                    <div className="text-[13px] text-ink">{option.label}</div>
+                    {option.description ? <div className="text-[11px] leading-5 text-faint">{option.description}</div> : null}
+                  </button>
+                );
+              })}
+              <input
+                value={other[question.question] ?? ""}
+                disabled={submitting}
+                placeholder="其他"
+                className="h-9 rounded-lg border border-line-hi bg-panel px-3 text-[13px] outline-none focus:border-accent"
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setOther((current) => ({ ...current, [question.question]: value }));
+                  if (!question.multiSelect && value.trim()) setPicked((current) => ({ ...current, [question.question]: [] }));
+                }}
+              />
+            </div>
+          </fieldset>
+        );
+      })}
+      {error ? <p className="mb-2 text-xs text-bad" role="alert">{error}</p> : null}
+      <div className="flex gap-2">
+        <Button type="button" variant="accent" disabled={submitting} onClick={() => void submit(false)}>提交</Button>
+        <Button type="button" variant="secondary" disabled={submitting} onClick={() => void submit(true)}>跳过</Button>
+      </div>
+    </div>
+  );
 }

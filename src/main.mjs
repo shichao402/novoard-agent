@@ -9,6 +9,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadAgentConfig, pinEditionListenPort, pinPanelPort } from "./config.mjs";
 import { loadTargets, expandSteps, deriveCard } from "./card.mjs";
+import { loadProfile, saveProfile } from "./profile.mjs";
+import { createPeerTalk } from "./peer-talk.mjs";
 import { createAgentRuntime } from "./agent-runtime.mjs";
 import { createTunnelClient } from "./tunnel-client.mjs";
 import { resolveConsoleRoot } from "./console-ui.mjs";
@@ -48,7 +50,8 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
   if (!loaded.ok) throw new Error(loaded.reason);
   const expanded = expandSteps({ targets: loaded.targets, agentDir: dir });
   if (!expanded.ok) throw new Error(expanded.reason);
-  const card = deriveCard({ agentId: config.agentId, targets: loaded.targets });
+  const profileRef = { current: loadProfile(dir) };
+  const card = deriveCard({ agentId: config.agentId, targets: loaded.targets, agentDir: dir, profile: profileRef.current });
   /** editor 保存后 card 热更新（tunnel 上报用新 card；hello 重连也带最新） */
   const cardRef = { current: card };
 
@@ -64,12 +67,14 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     runtime.replaceTargets(saved.expanded);
     localA2A.refreshTargets(saved.expanded);
     cardRef.current = saved.card;
+    peer?.replaceTargets(saved.expanded);
     tunnel.replaceTargets?.(saved.expanded);
     tunnel.replaceCard?.(saved.card);
     const up = tunnel.sendCardUpdate?.(saved.card);
     log.info?.(`[editor] 热生效：runtime/磁贴/委派查表已切新定义，card.update ${up?.ok ? "已上报 hub" : `未上报（${up?.reason ?? "hub 离线"}）`}`);
   };
 
+  let peer = null;
   const tunnel = createTunnelClient({
     config,
     card: cardRef.current,
@@ -78,6 +83,17 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     stateDir: state,
     log,
     onFatal,
+    onAgentMessage: (message) => peer?.receive(message),
+    onAgentNotice: (message) => peer?.note(message),
+  });
+  peer = createPeerTalk({
+    agentId: config.agentId,
+    profile: profileRef.current,
+    targets: expanded.targets,
+    tunnel,
+    chat: null,
+    stateDir: join(state, "peers"),
+    log,
   });
 
   // 终态上行同时落 agent 侧审计（契约 §6 两侧对账）
@@ -144,10 +160,29 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     chat,
     triggerHook: (state, skillId, taskId) => {
       if (TERMINAL_STATES_SET.has(state)) tunnel.uplinkTerminal?.(taskId, state, `tile-trigger ${skillId}`);
+      if (TERMINAL_STATES_SET.has(state)) peer.reportRun(taskId, state, skillId);
+    },
+    peer,
+    profile: {
+      read: () => profileRef.current,
+      save: (input) => {
+        const saved = saveProfile(dir, input);
+        if (!saved.ok) return saved;
+        profileRef.current = { role: saved.role, introduction: saved.introduction };
+        peer.replaceProfile(profileRef.current);
+        const current = store.read();
+        const next = deriveCard({ agentId: config.agentId, targets: current.ok ? current.targets : loaded.targets, agentDir: dir, profile: profileRef.current });
+        cardRef.current = next;
+        tunnel.replaceCard?.(next);
+        const up = tunnel.sendCardUpdate?.(next);
+        log.info?.(`[profile] 已更新自我介绍，card.update ${up?.ok ? "已上报 hub" : `未上报（${up?.reason ?? "hub 离线"}）`}`);
+        return { ok: true, role: saved.role, introduction: saved.introduction };
+      },
     },
   });
   const localAddr = await localA2A.start();
   const panelHost = config.uiHost.includes(":") ? `[${config.uiHost}]` : config.uiHost;
+  peer.replaceChat(chat);
   chat.setOrigin(`http://${panelHost}:${localAddr.port}`);
   const uiHostForUrl = config.uiHost.includes(":") ? `[${config.uiHost}]` : config.uiHost;
   log.info?.(`[local-a2a] 控制台: http://${uiHostForUrl}:${localAddr.port}`);
@@ -168,7 +203,7 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     await localA2A.close();
   }
 
-  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, onTargetsSaved, stop, agentDir: dir };
+  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, stop, agentDir: dir };
 }
 
 const TERMINAL_STATES_SET = new Set(["completed", "failed", "canceled", "rejected"]);

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DEST = join(ROOT, "desktop", "src-tauri", "resources", "agent-runtime");
-const FILES = ["chat-worker.mjs", "session-store.mjs", "chat-events.mjs", "novoard-tools.mjs", "novoard-skill.mjs", "jsonl.mjs", "codebuddy-config.mjs", "edition.mjs", "edition.gen.mjs"];
+const FILES = ["chat-worker.mjs", "session-store.mjs", "chat-events.mjs", "ask-user.mjs", "novoard-tools.mjs", "novoard-skill.mjs", "jsonl.mjs", "codebuddy-config.mjs", "edition.mjs", "edition.gen.mjs"];
 
 mkdirSync(DEST, { recursive: true });
 for (const file of FILES) {

@@ -19,6 +19,8 @@ export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, 
   const tokenToAgent = new Map(Object.entries(tokens).map(([agentId, token]) => [String(token), agentId]));
   const artifacts = [];
   const pendingOffline = []; // hello 后需补下发的任务（模拟 M2 flush）
+  const relays = [];
+  const wecom = [];
 
   /** 委派对齐契约：a2a 信封（taskId 信封层）+ body message/send + run 文本（agent handleDelegate 同款解析） */
   function delegate(ws, { taskId, target, vars }) {
@@ -38,8 +40,45 @@ export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, 
     }
   }
 
+  /** Hub 盖上调用方身份后，把自然语言交给目标成员。from 只来自这里，不接受报文里自带的 from。 */
+  function ask(ws, { taskId, from, text }) {
+    const frame = {
+      v: 1, kind: "a2a", msgId: `e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ts: new Date().toISOString(), taskId,
+      body: {
+        jsonrpc: "2.0", method: "message/send",
+        params: {
+          message: {
+            messageId: `msg-${Date.now()}`,
+            role: "user",
+            parts: [{ kind: "text", text: String(text ?? "") }],
+            contextId: taskId,
+            metadata: { lane: "agent", from },
+          },
+        },
+      },
+    };
+    try {
+      ws.send(JSON.stringify(frame));
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: error.message };
+    }
+  }
+
   const httpServer = createServer((req, res) => {
     const url = new URL(req.url, "http://x");
+    if (req.method === "GET" && url.pathname === "/api/cards") {
+      const token = String(req.headers.authorization ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
+      if (!tokenToAgent.get(token)) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "agent token required" }));
+        return;
+      }
+      const cards = [...members.entries()].map(([agentId, member]) => ({ agentId, card: member.card }));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ cards }));
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/api/artifacts") {
       const token = String(req.headers.authorization ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
       const agentId = tokenToAgent.get(token);
@@ -162,7 +201,15 @@ export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, 
         if (t) {
           const state = status?.state;
           if (state && state !== "working") t.state = state;
-          t.events.push(status);
+          t.events.push(frame.body);
+        }
+        const to = frame.body.params?.message?.metadata?.to;
+        if (to) {
+          relays.push({ to, taskId, body: frame.body });
+          const caller = members.get(to);
+          if (caller?.ws && caller.ws !== ws) {
+            try { caller.ws.send(JSON.stringify(frame)); } catch { /* 调用方刚断开 */ }
+          }
         }
         ws.send(JSON.stringify({ v: 1, kind: "ack", msgId: `ack-${frame.msgId}`, dedup: false }));
         return;
@@ -195,6 +242,9 @@ export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, 
           m.card = frame.body.card;
           ws.send(JSON.stringify({ v: 1, kind: "ack", msgId: `ack-${frame.msgId}`, dedup: false }));
         }
+      } else if (frame.body?.type === "notify.owner") {
+        wecom.push({ from: memberId, text: String(frame.body.text ?? ""), at: new Date().toISOString() });
+        ws.send(JSON.stringify({ v: 1, kind: "ack", msgId: `ack-${frame.msgId}`, dedup: false }));
       } else if (frame.body?.type === "task.terminal") {
         const t = tasks.get(frame.body.taskId);
         if (t) {
@@ -222,6 +272,20 @@ export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, 
     get tasks() { return tasks; },
     get frames() { return frames; },
     get artifacts() { return artifacts; },
+    get relays() { return relays; },
+    get wecom() { return wecom; },
+    listCards() {
+      return [...members.entries()].map(([agentId, member]) => ({ agentId, card: member.card }));
+    },
+    /** 智脑选定成员后发自然语言。from 由 Hub 盖章。 */
+    ask(agentId, { from, text, taskId }) {
+      const member = members.get(agentId);
+      if (!member) return { ok: false, reason: "member-offline" };
+      const tid = taskId ?? `task-mock-${Date.now()}`;
+      const sent = ask(member.ws, { taskId: tid, from, text });
+      if (sent.ok) tasks.set(tid, { state: "working", target: "converse", member: agentId, caller: from, events: [] });
+      return { ...sent, taskId: tid };
+    },
     /** 手动委派（契约形态 a2a message/send，绕过 HTTP） */
     delegateTo(agentId, { taskId, target, vars }) {
       const m = members.get(agentId);

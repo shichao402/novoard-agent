@@ -133,14 +133,42 @@ export type ChatSession = {
   preview: string;
 };
 
+export type AskOption = { label: string; description?: string };
+
+export type AskQuestion = {
+  question: string;
+  header: string;
+  options: AskOption[];
+  multiSelect?: boolean;
+};
+
 export type ChatEvent = {
   kind: string;
   text?: string;
   name?: string;
+  from?: string;
   input?: unknown;
   ok?: boolean;
   at?: string;
+  questionId?: string;
+  questions?: AskQuestion[];
+  answers?: Record<string, string>;
+  skipped?: boolean;
 };
+
+export type AgentProfile = {
+  ok: boolean;
+  role: string;
+  introduction: string;
+};
+
+export function getProfile(base: string) {
+  return request<AgentProfile>(base, "/api/profile");
+}
+
+export function saveProfile(base: string, input: { role: string; introduction: string }) {
+  return request<AgentProfile>(base, "/api/profile", { method: "PUT", body: JSON.stringify(input) });
+}
 
 export function getActivity(base: string) {
   return request<{ ok: boolean; events: ActivityEvent[] }>(base, "/api/activity?limit=30");
@@ -193,8 +221,28 @@ export async function sendMessage(base: string, id: string, text: string, onEven
   }
 }
 
+export function subscribeSessions(base: string, onEvent: (event: { kind: string; session?: ChatSession; sessionId?: string; focus?: boolean; event?: ChatEvent }) => void) {
+  const source = new EventSource(`${base}/api/sessions/events`);
+  source.onmessage = (message) => {
+    onEvent(JSON.parse(message.data));
+  };
+  return () => source.close();
+}
+
 export function interruptSession(base: string, id: string) {
   return request<{ ok: boolean }>(base, `/api/sessions/${encodeURIComponent(id)}/interrupt`, { method: "POST", body: "{}" });
+}
+
+export function answerQuestion(
+  base: string,
+  id: string,
+  questionId: string,
+  body: { skip?: boolean; answers?: Record<string, string> },
+) {
+  return request<{ ok: boolean }>(base, `/api/sessions/${encodeURIComponent(id)}/answer`, {
+    method: "POST",
+    body: JSON.stringify({ questionId, ...body }),
+  });
 }
 
 export type LogPage = {

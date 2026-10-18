@@ -94,7 +94,7 @@ export function handleDesktopCors(req, res) {
   return false;
 }
 
-export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat } = {}) {
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile } = {}) {
   const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
@@ -349,6 +349,7 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
             return;
           }
           const r = trigger({ skillId, vars });
+          if (rpc.params?.message?.metadata?.forPeer && r.task?.id) peer?.watchRun(r.task.id, skillId);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { id: r.task.id, status: r.task.status, contextId: "", kind: "task", history: [] } }));
           return;
@@ -443,9 +444,78 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       chat.doctor().then((result) => json(res, 200, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
       return;
     }
+    if (req.method === "GET" && url.pathname === "/api/profile") {
+      json(res, 200, { ok: true, ...(profile?.read?.() ?? { role: "", introduction: "" }) });
+      return;
+    }
+    if (req.method === "PUT" && url.pathname === "/api/profile") {
+      if (!profile?.save) return json(res, 404, { ok: false, reason: "自我介绍未装配" });
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      readJsonBody(req).then((body) => {
+        if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+        const saved = profile.save(body.data ?? {});
+        if (!saved.ok) return json(res, 422, { ok: false, reason: saved.reason });
+        json(res, 200, saved);
+      }).catch((error) => json(res, 500, { ok: false, message: error.message }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/peer/report") {
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      readJsonBody(req).then((body) => {
+        if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+        const result = peer?.report(body.data ?? {}) ?? { ok: false, reason: "会话能力未装配" };
+        json(res, result.ok ? 200 : 409, result);
+      }).catch((error) => json(res, 500, { ok: false, message: error.message }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/peer/ask") {
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      readJsonBody(req).then((body) => {
+        if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+        const result = peer?.ask?.({ to: body.data?.to, text: body.data?.text, contextId: body.data?.contextId }) ?? { ok: false, reason: "会话能力未装配" };
+        json(res, result.ok ? 200 : 409, result);
+      }).catch((error) => json(res, 500, { ok: false, message: error.message }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/peer/request") {
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      json(res, 200, peer?.holdForDetail?.() ?? { ok: false, reason: "会话能力未装配" });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/peer/presence") {
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      readJsonBody(req).then((body) => {
+        if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+        const result = peer?.presence(body.data?.text) ?? { ok: false, reason: "会话能力未装配" };
+        json(res, result.ok ? 200 : 409, result);
+      }).catch((error) => json(res, 500, { ok: false, message: error.message }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/peer/notify") {
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      readJsonBody(req).then((body) => {
+        if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+        json(res, 200, peer?.notifyOwner ? peer.notifyOwner(body.data?.text) : { ok: false, reason: "通知未装配" });
+      }).catch((error) => json(res, 500, { ok: false, message: error.message }));
+      return;
+    }
     if (url.pathname === "/api/sessions" && req.method === "GET") {
-      if (!chat) return json(res, 503, { ok: false, message: "会话能力未装配" });
-      chat.list().then((result) => json(res, 200, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
+      const peers = peer?.list?.() ?? [];
+      const finish = (sessions) => {
+        const byId = new Map(sessions.map((item) => [item.id, item]));
+        for (const item of peers) byId.set(item.id, item);
+        json(res, 200, { sessions: [...byId.values()] });
+      };
+      if (!chat) return finish([]);
+      chat.list().then((result) => finish(result.sessions ?? [])).catch((error) => json(res, 503, { ok: false, message: error.message }));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/sessions/events") {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+      const unsubscribe = peer?.subscribe?.((event) => {
+        try { res.write(`data: ${JSON.stringify(event)}\n\n`); } catch { /* 页面已离开 */ }
+      });
+      req.on("close", () => unsubscribe?.());
       return;
     }
     if (url.pathname === "/api/sessions" && req.method === "POST") {
@@ -457,23 +527,44 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       }).then((result) => json(res, 201, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
       return;
     }
-    const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)(?:\/(messages|interrupt))?$/);
+    const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)(?:\/(messages|interrupt|answer))?$/);
     if (sessionMatch) {
-      if (!chat) return json(res, 503, { ok: false, message: "会话能力未装配" });
       const sessionId = decodeURIComponent(sessionMatch[1]);
       const action = sessionMatch[2];
+      if (!chat && !(peer?.has?.(sessionId) && !action)) return json(res, 503, { ok: false, message: "会话能力未装配" });
       if (req.method === "GET" && !action) {
+        if (peer?.has?.(sessionId)) return json(res, 200, peer.history(sessionId));
+        if (!chat) return json(res, 404, { ok: false, message: "会话不存在" });
         chat.history(sessionId).then((result) => json(res, 200, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
         return;
       }
       if (req.method === "DELETE" && !action) {
         if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+        if (peer?.has?.(sessionId)) return json(res, 200, peer.remove(sessionId));
+        if (!chat) return json(res, 404, { ok: false, message: "会话不存在" });
         chat.remove(sessionId).then((result) => json(res, 200, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
         return;
       }
       if (req.method === "POST" && action === "interrupt") {
         if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
         chat.interrupt(sessionId).then((result) => json(res, 200, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
+        return;
+      }
+      if (req.method === "POST" && action === "answer") {
+        if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+        if (!chat?.answer) return json(res, 503, { ok: false, message: "会话能力未装配" });
+        readJsonBody(req).then((body) => {
+          if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+          return chat.answer(sessionId, {
+            questionId: body.data?.questionId,
+            answers: body.data?.answers,
+            skip: body.data?.skip === true,
+          });
+        }).then((result) => {
+          if (!result) return;
+          const status = result.ok ? 200 : result.gone ? 409 : 400;
+          json(res, status, result.ok ? result : { ok: false, message: result.message || "这次提问已经结束" });
+        }).catch((error) => json(res, 503, { ok: false, message: error.message }));
         return;
       }
       if (req.method === "POST" && action === "messages") {
@@ -485,6 +576,7 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
           res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
           try {
             const result = await chat.send(sessionId, body.data?.text ?? "", (event) => {
+              if (res.writableEnded || res.destroyed) return;
               res.write(`data: ${JSON.stringify(event)}\n\n`);
             });
             res.write(`data: ${JSON.stringify({ kind: "result", session: result.session })}\n\n`);

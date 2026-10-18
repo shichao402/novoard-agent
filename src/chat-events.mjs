@@ -14,7 +14,7 @@ export function normalizeSdkMessage(message) {
     const text = blocks.filter((block) => block?.type === "text" && block.text).map((block) => block.text).join("");
     if (text) events.push({ kind: "assistant", text });
     for (const block of blocks) {
-      if (block?.type === "tool_use") {
+      if (block?.type === "tool_use" && block.name !== "AskUserQuestion") {
         events.push({ kind: "tool", name: String(block.name ?? "tool"), input: block.input ?? {} });
       }
     }
