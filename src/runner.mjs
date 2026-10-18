@@ -81,6 +81,12 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
       });
       let stdout = "";
       let stderr = "";
+      let stepClosed = false;
+      const endStep = (exit) => {
+        if (stepClosed) return;
+        stepClosed = true;
+        try { onStepEnd({ index: index + 1, exit }); } catch { /* 记录失败不挡住终态 */ }
+      };
       child.stdout.on("data", (chunk) => {
         const text = String(chunk);
         stdout = tail(stdout, text);
@@ -92,11 +98,11 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
         onOutput("stderr", text);
       });
       child.on("error", (error) => {
-        try { onStepEnd({ index: index + 1, exit: 1 }); } catch { /* 记录失败不挡住终态 */ }
+        endStep(1);
         finish({ ok: false, stderr: `spawn 失败：${error.message}` });
       });
       child.on("close", (code) => {
-        try { onStepEnd({ index: index + 1, exit: code ?? 1 }); } catch { /* 记录失败不挡住终态 */ }
+        endStep(code ?? 1);
         if (currentChild === child) currentChild = null;
         if (timedOut) finish({ ok: false, state: "failed", stderr: "运行超时" });
         else if (code === 0) finish({ ok: true, stdout, stderr });

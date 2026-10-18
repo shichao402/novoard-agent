@@ -41,7 +41,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
       return { ok: true, reason: "input-required" };
     }
 
-    return startExecution({ taskId, skillId, vars, steps, onTerminal, onProgress });
+    return startExecution({ taskId, skillId, vars, steps, onTerminal, onProgress, onTrace });
   }
 
   function startExecution({ taskId, skillId, vars, steps, onTerminal, onProgress, onTrace }) {

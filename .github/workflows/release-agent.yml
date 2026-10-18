@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: shichao402/Novoard
-          ref: 62047a64fa0b41336e88c798207d0c37e77e74ad
+          ref: a2eea2d962e528230de6b8b524917f6601b1a8b8
           path: .contract-ssot
           sparse-checkout: |
             docs/architecture/contracts.md
