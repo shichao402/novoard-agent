@@ -52,6 +52,29 @@
             "enum": ["always", "on-failure", "never"],
             "description": "私有扩展（契约 §2，M3）：target notify 策略透传，hub 终态通知前查表过滤"
           },
+          "x-novoard-timeout": {
+            "type": "string",
+            "pattern": "^\\d+(s|m|h|d)$",
+            "description": "私有扩展（契约 §1.1）：单次运行上限"
+          },
+          "x-novoard-lost": {
+            "type": "object",
+            "required": ["ttl"],
+            "properties": {
+              "ttl": { "type": "string", "pattern": "^\\d+(s|m|h|d)$" }
+            },
+            "additionalProperties": false,
+            "description": "私有扩展（契约 §1.1）：成员断开后判定 agent-lost 的等待上限"
+          },
+          "x-novoard-approval": {
+            "type": "object",
+            "required": ["ttl"],
+            "properties": {
+              "ttl": { "type": "string", "pattern": "^\\d+(s|m|h|d)$" }
+            },
+            "additionalProperties": false,
+            "description": "私有扩展（契约 §1.1）：input-required 审批等待上限"
+          },
           "x-novoard-kind": {
             "const": "agent",
             "description": "自然语言对话技能。不进全局 skill 路由表，多台成员可以同时声明。"

@@ -116,7 +116,7 @@ export function persistAgentConfig({ dir, hubUrl, agentId, agentToken, localPort
     agentId: id,
     hubUrl: norm.url,
     agentToken: token,
-    contractVersion: "2.0",
+    contractVersion: "2.1",
     localPort: portNumber,
     uiHost: ui.host,
     ...(ui.remote ? { uiToken: ui.token } : {}),

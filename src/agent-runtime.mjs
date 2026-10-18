@@ -7,12 +7,13 @@
 import { createRunner } from "./runner.mjs";
 import { parseDuration } from "./duration.mjs";
 import { createShortcutRun } from "./shortcut-log.mjs";
+import { openRunTrace } from "./run-trace.mjs";
 
 const DEFAULT_TIMEOUT = "10m";
 const DEFAULT_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 32;
 
-export function createAgentRuntime({ targets, log = console, shortcutLogDir, concurrency = MAX_CONCURRENCY } = {}) {
+export function createAgentRuntime({ targets, log = console, shortcutLogDir, runTraceDir, bootId = "", concurrency = MAX_CONCURRENCY } = {}) {
   /** taskId → { state, runner?, waitTimer?, pending? } */
   const running = new Map();
   const executions = new Set();
@@ -27,7 +28,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, con
     return Object.keys(currentTargets ?? {});
   }
 
-  function launch({ taskId, skillId, vars, steps, onTerminal, onProgress }) {
+  function launch({ taskId, skillId, vars, steps, onTerminal, onProgress, onTrace }) {
     if (stopping) return { ok: false, reason: "agent-stopping" };
     const targetDef = currentTargets?.[skillId];
     if (!targetDef) return { ok: false, reason: `unknown target: ${skillId}` };
@@ -35,7 +36,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, con
 
     if (targetDef.requiresApproval === true) {
       // M4 F3：挂起而非终态——hub 侧 task 停在 input-required，恢复帧到达后 startExecution
-      running.set(taskId, { state: "input-required", pending: { skillId, vars, steps, onTerminal, onProgress } });
+      running.set(taskId, { state: "input-required", pending: { skillId, vars, steps, onTerminal, onProgress, onTrace } });
       onTerminal?.("input-required", `target ${skillId} requiresApproval=true，等待审批（hub 审批门）`);
       return { ok: true, reason: "input-required" };
     }
@@ -43,7 +44,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, con
     return startExecution({ taskId, skillId, vars, steps, onTerminal, onProgress });
   }
 
-  function startExecution({ taskId, skillId, vars, steps, onTerminal, onProgress }) {
+  function startExecution({ taskId, skillId, vars, steps, onTerminal, onProgress, onTrace }) {
     if (stopping) return { ok: false, reason: "agent-stopping" };
     const targetDef = currentTargets?.[skillId];
     const limit = targetLimit(targetDef);
@@ -61,9 +62,18 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, con
     activeCount += 1;
     const startedAt = Date.now();
     const runLog = openRunLog(skillId, taskId);
+    const trace = openTrace(taskId);
     const timeoutMs = parseDuration(targetDef?.timeout, parseDuration(DEFAULT_TIMEOUT, 600_000));
     log.info?.(`[shortcut] 开始 target=${skillId} task=${taskId}${runLog ? ` log=${runLog.relative}` : ""}`);
     runLog?.info(`开始 ${skillId}，超时 ${targetDef?.timeout || DEFAULT_TIMEOUT}，并发上限 ${limit}`);
+    if (trace && trace.seq === 0) {
+      emitTrace(trace, onTrace, {
+        type: "run/start",
+        target: skillId,
+        bootId,
+        timeout: targetDef?.timeout || DEFAULT_TIMEOUT,
+      });
+    }
     let runner;
     try {
       runner = createRunner({
@@ -72,23 +82,29 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, con
         timeoutMs,
         onOutput: (stream, text) => runLog?.output(stream, text),
         onProgress: (i, n) => onProgress?.(i, n, `第 ${i}/${n} 步`),
+        onStepStart: ({ index, command }) => {
+          emitTrace(trace, onTrace, { type: "step/start", index, command, target: skillId });
+        },
+        onStepEnd: ({ index, exit }) => {
+          emitTrace(trace, onTrace, { type: "step/end", index, exit, target: skillId });
+        },
       });
     } catch (error) {
-      finish(skillId, taskId, startedAt, runLog, "failed", error?.message ?? error, onTerminal);
+      finish(skillId, taskId, startedAt, runLog, trace, onTrace, "failed", error?.message ?? error, onTerminal);
       return { ok: false, reason: error?.message ?? String(error) };
     }
     running.set(taskId, { state: "working", runner, skillId });
     const execution = runner
       .run(vars)
-      .then((result) => finish(skillId, taskId, startedAt, runLog, result.state ?? (result.ok ? "completed" : "failed"), result.stderr, onTerminal))
-      .catch((error) => finish(skillId, taskId, startedAt, runLog, "failed", error?.message ?? error, onTerminal))
+      .then((result) => finish(skillId, taskId, startedAt, runLog, trace, onTrace, result.state ?? (result.ok ? "completed" : "failed"), result.stderr, onTerminal))
+      .catch((error) => finish(skillId, taskId, startedAt, runLog, trace, onTrace, "failed", error?.message ?? error, onTerminal))
       .finally(() => executions.delete(execution));
     executions.add(execution);
     return { ok: true, reason: "working", log: runLog?.relative ?? null };
   }
 
   const finished = new Set();
-  function finish(skillId, taskId, startedAt, runLog, state, detail, onTerminal) {
+  function finish(skillId, taskId, startedAt, runLog, trace, onTrace, state, detail, onTerminal) {
     if (finished.has(taskId)) return;
     finished.add(taskId);
     activeByTarget.set(skillId, Math.max(0, (activeByTarget.get(skillId) ?? 1) - 1));
@@ -97,9 +113,25 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, con
     const elapsed = Date.now() - startedAt;
     if (detail && state === "failed" && String(detail).includes("运行超时")) runLog?.error("运行超时");
     runLog?.info(`结束 state=${state} elapsed=${elapsed}ms`);
+    emitTrace(trace, onTrace, { type: "run/end", state, target: skillId });
     log.info?.(`[shortcut] 结束 target=${skillId} task=${taskId} state=${state} elapsed=${elapsed}ms${runLog ? ` log=${runLog.relative}` : ""}`);
     const summary = state === "failed" && String(detail ?? "").includes("运行超时") ? "运行超时" : state === "failed" ? "失败" : "";
     try { onTerminal?.(state, summary); } catch { /* 状态回调不能把并发计数弄乱 */ }
+  }
+
+  function openTrace(taskId) {
+    try {
+      return openRunTrace({ root: runTraceDir, taskId });
+    } catch (error) {
+      log.warn?.(`[run-trace] 无法写运行记录 task=${taskId} ${error.message}`);
+      return null;
+    }
+  }
+
+  function emitTrace(trace, onTrace, partial) {
+    if (!trace) return;
+    const event = trace.append(partial);
+    try { onTrace?.(event); } catch { /* 上行失败不挡住已经落盘的记录 */ }
   }
 
   function openRunLog(skillId, taskId) {

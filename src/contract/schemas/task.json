@@ -62,7 +62,30 @@
       }
     },
     "history": { "type": "array", "items": { "type": "object" } },
-    "metadata": { "type": "object" }
+    "metadata": { "type": "object" },
+    "trace": {
+      "type": "array",
+      "description": "追加运行记录，只用于追溯，不用于恢复执行（契约 §4.5）",
+      "items": {
+        "type": "object",
+        "required": ["seq", "type", "ts", "taskId"],
+        "properties": {
+          "seq": { "type": "integer", "minimum": 1 },
+          "type": { "enum": ["run/start", "step/start", "step/end", "run/end", "run/truncated"] },
+          "ts": { "type": "string" },
+          "taskId": { "type": "string", "pattern": "^task-" },
+          "target": { "type": "string" },
+          "bootId": { "type": "string" },
+          "timeout": { "type": "string" },
+          "index": { "type": "integer", "minimum": 1 },
+          "command": { "type": "string" },
+          "exit": { "type": "integer" },
+          "state": { "type": "string" },
+          "last": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    }
   },
   "additionalProperties": false
 }

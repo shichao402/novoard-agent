@@ -10,6 +10,7 @@ import WebSocket from "ws";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { reportAbandonedRuns } from "./run-trace.mjs";
 
 const PING_INTERVAL_MS = 25_000;
 const RETRY_BASE_MS = 1_000;
@@ -33,7 +34,7 @@ function callerParts(parts, text) {
   return outgoing;
 }
 
-export function createTunnelClient({ config, card, targets, runner, stateDir, log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice } = {}) {
+export function createTunnelClient({ config, card, targets, runner, stateDir, runTraceDir, bootId = "", log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice } = {}) {
   if (!config?.ok) throw new Error(`lite-agent 配置无效：${config?.reason}`);
   const { agentId, hubUrl, agentToken, contractVersion } = config;
   const hubHttpUrl = new URL(hubUrl);
@@ -213,6 +214,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
           agentId,
           card: getCard(),
           inFlightTaskIds,
+          ...(bootId ? { bootId } : {}),
         });
         resolve(true);
       });
@@ -262,6 +264,11 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
         backoffMs = RETRY_BASE_MS;
         // 重连对账：重放全部未确认上行帧（同 msgId，hub 幂等）
         for (const env of pending.values()) send(env);
+        reportAbandonedRuns({
+          root: runTraceDir,
+          runningTaskIds: (runner.runningTasks ?? []).map((task) => task.id),
+          onTrace: (taskId, event) => uplink(taskId, runTraceNotification(taskId, event)),
+        });
         log.info?.(`已注册到 hub（agentId=${agentId}，重放 ${pending.size} 个未确认上行帧）`);
       }
       return;
@@ -344,11 +351,32 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, lo
       onTerminal: (state, detail) => {
         uplink(env.taskId, statusNotification(env.taskId, state, detail));
       },
+      onTrace: (event) => {
+        uplink(event.taskId || env.taskId, runTraceNotification(event.taskId || env.taskId, event));
+      },
       onProgress: (i, n, d) => {
         // M4 F2 步骤级进度上行（非终态 status-update，hub SSE 透传给委派方）
         uplink(env.taskId, statusNotification(env.taskId, "working", `step ${i}/${n}：${d}`));
       },
     });
+  }
+
+  function runTraceNotification(taskId, event) {
+    return {
+      jsonrpc: "2.0",
+      method: "message/notification",
+      params: {
+        message: {
+          messageId: `msg-${randomUUID().slice(0, 8)}`,
+          role: "agent",
+          parts: [],
+          contextId: taskId,
+          taskId,
+          kind: "run-trace",
+          trace: event,
+        },
+      },
+    };
   }
 
   /** A2A push notification 形状（契约 §4.3 agent 上行）。 */

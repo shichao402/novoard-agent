@@ -4,6 +4,7 @@
  * 启动时序（纪律一）：装载 targets → schema 校验 → 展开 → 派生 card → 连隧道 → hello。
  * 本地审计：agent 侧一份 JSONL（契约 §6 落两侧各一份），与 hub 可对账。
  */
+import { randomUUID } from "node:crypto";
 import { mkdirSync, appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -55,10 +56,14 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
   /** editor 保存后 card 热更新（tunnel 上报用新 card；hello 重连也带最新） */
   const cardRef = { current: card };
 
+  const logDir = dirname(log.file || join(dirname(state), "logs", "agent.jsonl"));
+  const bootId = randomUUID();
   const runtime = createAgentRuntime({
     targets: expanded.targets,
     log,
-    shortcutLogDir: join(dirname(log.file || join(dirname(state), "logs", "agent.jsonl")), "shortcuts"),
+    bootId,
+    shortcutLogDir: join(logDir, "shortcuts"),
+    runTraceDir: join(logDir, "runs"),
   });
 
   // target 编辑器后端（M6）：保存 → 从盘重装载 → 热替换 runtime/localA2A 注册表 → card.update 上报 hub
@@ -81,6 +86,8 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
     targets: expanded.targets,
     runner: runtime,
     stateDir: state,
+    runTraceDir: join(logDir, "runs"),
+    bootId,
     log,
     onFatal,
     onAgentMessage: (message) => peer?.receive(message),
@@ -98,12 +105,15 @@ export async function createLiteAgent({ configPath, agentDir, stateDir, log = co
 
   // 终态上行同时落 agent 侧审计（契约 §6 两侧对账）
   const origLaunch = runtime.launch;
-  runtime.launch = ({ taskId, skillId, vars, steps, onTerminal }) => {
-    localAudit({ target: skillId, taskId, outcome: "working" });
-    return origLaunch({ taskId, skillId, vars, steps, onTerminal: (state, detail) => {
-      localAudit({ target: skillId, taskId, outcome: state, detail });
-      onTerminal?.(state, detail);
-    } });
+  runtime.launch = (input) => {
+    localAudit({ target: input.skillId, taskId: input.taskId, outcome: "working" });
+    return origLaunch({
+      ...input,
+      onTerminal: (state, detail) => {
+        localAudit({ target: input.skillId, taskId: input.taskId, outcome: state, detail });
+        input.onTerminal?.(state, detail);
+      },
+    });
   };
 
   // 本地 A2A 端点（ADR-0008；PRD-1 触发路径统一：磁贴/热键/CLI → 本机端点）

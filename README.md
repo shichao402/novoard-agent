@@ -21,7 +21,7 @@ Windows/macOS 的桌面部分是独立 Tauri 轻壳：它启动并监管内置 S
 - 桌面数据目录：Windows `%APPDATA%/com.novoard.agent/`，macOS `~/Library/Application Support/com.novoard.agent/`。卸载应用不会主动删除身份与 target。
 - Linux 数据目录：仍为启动时工作目录，包含 `agent.json`、`agents/` 和 `.agent-state/`。
 - 平台差异收敛在源码内：script 步骤在 Windows 走 `cmd.exe`，openApp/openPath 走 `start`；macOS/Linux 使用各自系统命令。
-- 契约锁定拷贝：`src/contract/` 内含九张 schema 与 frames 校验器；当前锁定 v2.0，SSOT 位于 Hub 仓。CI 会检出工作流中固定 commit 的 Hub SSOT，逐字比较 schema，并对 frames 做排除路径锚差异后的语义比较；升级时必须同时更新拷贝、`CONTRACT_VERSION` 与固定 commit。
+- 契约锁定拷贝：`src/contract/` 内含九张 schema 与 frames 校验器；当前锁定 v2.1，SSOT 位于 Hub 仓。CI 会检出工作流中固定 commit 的 Hub SSOT，逐字比较 schema，并对 frames 做排除路径锚差异后的语义比较；升级时必须同时更新拷贝、`CONTRACT_VERSION` 与固定 commit。
 
 ## Windows / macOS 使用
 

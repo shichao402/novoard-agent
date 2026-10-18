@@ -58,6 +58,18 @@
           "pattern": "^\\d+(s|m|h|d)$",
           "default": "10m",
           "description": "单次运行上限，如 30s / 10m / 1h。到点会停掉这次运行"
+        },
+        "lostTtl": {
+          "type": "string",
+          "pattern": "^\\d+(s|m|h|d)$",
+          "default": "10m",
+          "description": "成员断开后，超过此时长仍未带着该任务重连，working 收成 agent-lost"
+        },
+        "approvalTtl": {
+          "type": "string",
+          "pattern": "^\\d+(s|m|h|d)$",
+          "default": "10m",
+          "description": "requiresApproval 时 input-required 的等待上限，到期转 canceled"
         }
       },
       "additionalProperties": false

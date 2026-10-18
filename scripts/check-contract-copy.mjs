@@ -17,7 +17,7 @@ const HUB_ROOT = process.env.NOVOARD_HUB_ROOT
   : "";
 
 /** 锁定拷贝的契约版本（来源 hub 仓 contracts.md SSOT；升级时同步改这里） */
-export const CONTRACT_VERSION = "v2.0";
+export const CONTRACT_VERSION = "v2.1";
 
 const SCHEMA_FILES = ["a2a-envelope.json", "frame-agent-hello.json", "frame-agent-ping.json", "frame-telemetry.json", "frame-card-update.json", "agent-card.json", "task.json", "audit-event.json", "target.json"];
 

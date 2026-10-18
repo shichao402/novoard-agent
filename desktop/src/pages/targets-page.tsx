@@ -17,6 +17,8 @@ type Draft = {
   offlineTtl: string;
   concurrency: string;
   timeout: string;
+  lostTtl: string;
+  approvalTtl: string;
   template: string;
   script: string;
   cwd: string;
@@ -53,6 +55,8 @@ function toDraft(id: string, target: TargetDef): Draft {
     offlineTtl: target.offlineTtl ?? "30m",
     concurrency: String(target.concurrency ?? 1),
     timeout: target.timeout ?? "10m",
+    lostTtl: target.lostTtl ?? "10m",
+    approvalTtl: target.approvalTtl ?? "10m",
     template: target.template ?? "",
     script: step?.script ?? "",
     cwd: step?.cwd ?? "",
@@ -69,6 +73,8 @@ function toDef(draft: Draft, previous?: TargetDef): TargetDef {
     offline: draft.offline,
     concurrency: clampConcurrency(draft.concurrency),
     timeout: draft.timeout.trim() || "10m",
+    lostTtl: draft.lostTtl.trim() || "10m",
+    ...(draft.requiresApproval ? { approvalTtl: draft.approvalTtl.trim() || "10m" } : {}),
     ...(draft.offline === "queue" ? { offlineTtl: draft.offlineTtl.trim() || "30m" } : {}),
     vars: previous?.vars ?? {},
   };
@@ -137,6 +143,8 @@ export function TargetsPage({ base }: { base: string }) {
         offlineTtl: "30m",
         concurrency: "1",
         timeout: "10m",
+        lostTtl: "10m",
+        approvalTtl: "10m",
         template: "",
         script: "echo hello",
         cwd: "",
@@ -171,8 +179,15 @@ export function TargetsPage({ base }: { base: string }) {
         setError(`${draft.id} 需要一条命令`);
         return;
       }
-      if (!/^\d+(s|m|h|d)$/.test(draft.timeout.trim() || "10m")) {
-        setError(`${draft.id} 的超时需要写成 30s、10m、1h 这种格式`);
+      const durations: Array<[string, string]> = [
+        ["运行超时", draft.timeout.trim() || "10m"],
+        ["断线后判定丢失", draft.lostTtl.trim() || "10m"],
+      ];
+      if (draft.requiresApproval) durations.push(["审批等待", draft.approvalTtl.trim() || "10m"]);
+      if (draft.offline === "queue") durations.push(["离线排队上限", draft.offlineTtl.trim() || "30m"]);
+      const badDuration = durations.find(([, value]) => !/^\d+(s|m|h|d)$/.test(value));
+      if (badDuration) {
+        setError(`${draft.id} 的${badDuration[0]}需要写成 30s、10m、1h 这种格式`);
         return;
       }
       targets[draft.id] = toDef(draft, original[draft.id]);
@@ -283,6 +298,19 @@ export function TargetsPage({ base }: { base: string }) {
               <Field label="运行超时" hint="到点会停掉这一次，例如 30s、10m、1h">
                 <Input value={current.timeout} onChange={(event) => update({ timeout: event.target.value.trim() })} spellCheck={false} />
               </Field>
+              <Field label="断线后判定丢失" hint="成员断开超过这个时间，还没带着任务重连，就记为失败">
+                <Input value={current.lostTtl} onChange={(event) => update({ lostTtl: event.target.value.trim() })} spellCheck={false} />
+              </Field>
+              {current.offline === "queue" ? (
+                <Field label="离线排队上限" hint="成员离线时排队等它上线，超过这个时间就失败">
+                  <Input value={current.offlineTtl} onChange={(event) => update({ offlineTtl: event.target.value.trim() })} spellCheck={false} />
+                </Field>
+              ) : null}
+              {current.requiresApproval ? (
+                <Field label="审批等待" hint="等确认超过这个时间，这次任务会取消">
+                  <Input value={current.approvalTtl} onChange={(event) => update({ approvalTtl: event.target.value.trim() })} spellCheck={false} />
+                </Field>
+              ) : null}
             </div>
             <label className="flex items-center gap-2 text-[13px] text-muted">
               <input type="checkbox" checked={current.requiresApproval} onChange={(event) => update({ requiresApproval: event.target.checked })} />

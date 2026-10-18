@@ -93,11 +93,17 @@ export function deriveCard({ agentId, targets, agentDir, profile, description, v
         tags: ["novoard"],
       };
       if (t.offline) {
-        skill["x-novoard-offline"] = { policy: t.offline, ...(t.offlineTtl ? { ttl: t.offlineTtl } : {}) };
+        skill["x-novoard-offline"] = {
+          policy: t.offline,
+          ...(t.offline === "queue" || t.offlineTtl ? { ttl: t.offlineTtl || "30m" } : {}),
+        };
       }
       if (t.notify) {
         skill["x-novoard-notify"] = t.notify; // M3 F2：通知策略透传（always/on-failure/never），hub 查表过滤终态通知
       }
+      skill["x-novoard-timeout"] = t.timeout || "10m";
+      skill["x-novoard-lost"] = { ttl: t.lostTtl || "10m" };
+      if (t.requiresApproval) skill["x-novoard-approval"] = { ttl: t.approvalTtl || "10m" };
       return skill;
     }),
   ];

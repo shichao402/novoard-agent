@@ -9,6 +9,11 @@
     "contractVersion": { "type": "string", "pattern": "^\\d+\\.\\d+$" },
     "agentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
     "card": { "$ref": "agent-card.json" },
+    "bootId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "进程启动时生成，只放内存。同一进程重连不变，进程重启才变（契约 §4.4）"
+    },
     "inFlightTaskIds": {
       "type": "array",
       "description": "重连时上报在途任务，供 hub 对账（契约 §4.4）",

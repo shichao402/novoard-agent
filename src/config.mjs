@@ -44,7 +44,7 @@ export function loadAgentConfig({ configPath, env = process.env } = {}) {
   const agentId = String(data.agentId ?? env.NOVOARD_AGENT_ID ?? "").trim();
   const hubUrl = String(data.hubUrl ?? env.NOVOARD_HUB_URL ?? "").trim();
   const agentToken = String(data.agentToken ?? env.NOVOARD_AGENT_TOKEN ?? "").trim();
-  const contractVersion = String(data.contractVersion ?? env.NOVOARD_CONTRACT_VERSION ?? "2.0").trim();
+  const contractVersion = String(data.contractVersion ?? env.NOVOARD_CONTRACT_VERSION ?? "2.1").trim();
   // UI 监听项允许环境变量显式覆盖文件：桌面壳据此强制回环，Linux 可按需开放测试入口。
   const localPort = Number(env.NOVOARD_LOCAL_PORT ?? data.localPort ?? data.uiPort ?? 0) || 0;
   const uiHost = String(env.NOVOARD_UI_HOST ?? data.uiHost ?? "127.0.0.1").trim();

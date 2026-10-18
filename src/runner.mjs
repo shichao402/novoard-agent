@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 
 const VAR_RE = /\{\{(\w+)\}\}/g;
 
-export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd(), timeoutMs = 0, onOutput = () => {}, onProgress = () => {} } = {}) {
+export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd(), timeoutMs = 0, onOutput = () => {}, onProgress = () => {}, onStepStart = () => {}, onStepEnd = () => {} } = {}) {
   if (!Array.isArray(steps) || steps.length === 0) {
     throw new Error("steps 必须是非空数组");
   }
@@ -67,6 +67,12 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
       const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
       const flag = process.platform === "win32" ? "/c" : "-c";
       onOutput("status", `[step ${index + 1}] ${cmd}`);
+      try {
+        onStepStart({ index: index + 1, command: cmd });
+      } catch (error) {
+        finish({ ok: false, stderr: `运行记录写入失败：${error.message}` });
+        return;
+      }
       const child = spawn(shell, [flag, cmd], {
         cwd: workDir,
         env: env ? { ...process.env, ...env } : process.env,
@@ -85,8 +91,12 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
         stderr = tail(stderr, text);
         onOutput("stderr", text);
       });
-      child.on("error", (error) => finish({ ok: false, stderr: `spawn 失败：${error.message}` }));
+      child.on("error", (error) => {
+        try { onStepEnd({ index: index + 1, exit: 1 }); } catch { /* 记录失败不挡住终态 */ }
+        finish({ ok: false, stderr: `spawn 失败：${error.message}` });
+      });
       child.on("close", (code) => {
+        try { onStepEnd({ index: index + 1, exit: code ?? 1 }); } catch { /* 记录失败不挡住终态 */ }
         if (currentChild === child) currentChild = null;
         if (timedOut) finish({ ok: false, state: "failed", stderr: "运行超时" });
         else if (code === 0) finish({ ok: true, stdout, stderr });

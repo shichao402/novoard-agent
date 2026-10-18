@@ -49,6 +49,8 @@ export type TargetDef = {
   offlineTtl?: string;
   concurrency?: number;
   timeout?: string;
+  lostTtl?: string;
+  approvalTtl?: string;
 };
 
 export function apiBase(endpoint: Endpoint | null) {
