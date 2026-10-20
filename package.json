@@ -16,6 +16,8 @@
     "desktop:build": "npm run build && node scripts/stage-agent-runtime.mjs && npm run desktop:stage && cd desktop && npx tauri build",
     "desktop:dev-deploy": "node scripts/deploy-windows-dev.mjs",
     "desktop:release-deploy": "node scripts/deploy-windows-release.mjs",
+    "desktop:mac-dev-deploy": "node scripts/deploy-macos-dev.mjs",
+    "desktop:mac-release-deploy": "node scripts/deploy-macos-release.mjs",
     "release:sync-version": "node scripts/sync-release-version.mjs",
     "contract-gate": "node scripts/check-contract-copy.mjs",
     "test": "npm run contract-gate && node --test \"test/*.mjs\""

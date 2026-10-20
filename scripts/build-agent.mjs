@@ -118,6 +118,21 @@ async function inject() {
     `注入基底缺 SEA fuse（源码构建的 node 无 fuse 串）：${nodeBin}\n` +
     `请用官方发行版 node（https://nodejs.org/dist/），或设 NODE_SEA_BASE 指向官方 node 可执行文件`
   );
+  // macOS 上 Node 24+ 的二进制地址布局会让注入后的 SEA 在 dyld 阶段直接 abort：
+  // "unsupported thread-local, larger than 4GB"。发行产物统一用 Node 22（与 CI 一致）。
+  if (targetPlatform === "darwin") {
+    const baseMajor = Number(
+      execFileSync(nodeBin, ["-p", "process.versions.node.split('.')[0]"], { encoding: "utf8" }).trim(),
+    );
+    if (baseMajor !== 22) {
+      throw new Error(
+        `macOS 的 SEA 注入基底必须是 Node 22（当前 ${baseMajor}）。\n` +
+        `Node 24+ 注入的产物会在 dyld 阶段崩溃：unsupported thread-local, larger than 4GB。\n` +
+        `请设 NODE_SEA_BASE 指向 Node 22 官方 node，例如：\n` +
+        `  NODE_SEA_BASE=/path/to/node-v22.x-darwin-${targetArch}/bin/node node scripts/build-agent.mjs`
+      );
+    }
+  }
   cpSync(nodeBin, exePath);
   // node 发行二进制只读（555），postject 需要可写
   chmodSync(exePath, isWin ? 0o666 : 0o755);
