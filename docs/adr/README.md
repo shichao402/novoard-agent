@@ -14,6 +14,7 @@
 | [0002](0002-single-process-carrier.md) | 单进程载体，agent 自带 HTTP 服务，桌面壳只监管 | Accepted | 2026-10-20 |
 | [0003](0003-loopback-trust-boundary.md) | 回环即信任边界，写端点靠同源校验 | Accepted | 2026-10-20 |
 | [0004](0004-contract-copy-boundary.md) | 契约 SSOT 在 Hub，本仓只持锁定拷贝 | Accepted | 2026-10-20 |
+| [0016](0016-desktop-shell-over-pwa-tiles.md) | 桌面载体由 PWA 磁贴转向 Tauri 壳 | Accepted | 2026-10-20 |
 
 ### 执行
 
