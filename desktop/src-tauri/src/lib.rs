@@ -811,6 +811,7 @@ mod tests {
             Some(99),
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(first.max_pages, 20);
@@ -825,6 +826,7 @@ mod tests {
                 })
                 .collect(),
             Some(1),
+            None,
             None,
             None,
         )
