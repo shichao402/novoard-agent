@@ -224,7 +224,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
         registered = false;
         if (stopped) return;
         // 断线重连：在途任务继续跑，终态帧在缓存里等重连重放（契约 §4.4 第 1-2 条）
-        setTimeout(connectOnce, backoff()).unref?.(); // unref：测试/CLI 进程不被无限重连挡住退出
+        scheduleReconnect();
       });
       ws.on("error", (error) => {
         log.error?.(`隧道连接错误：${error.message}`);
@@ -240,12 +240,26 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
     return v;
   }
 
+  /** 退避重连（断线与可重试 hello 拒绝共用）。unref：测试/CLI 不被无限重连挡住退出。 */
+  function scheduleReconnect() {
+    setTimeout(connectOnce, backoff()).unref?.();
+  }
+
   function handleDownlink(raw) {
     let frame;
     try { frame = JSON.parse(String(raw)); } catch { return; }
     if (frame.kind === "ops") {
       const body = frame.body ?? {};
       if (body.type === "agent.hello.nack") {
+        // instance-conflict：同身份已有别的实例在线（契约 §4.1）。这不是配置错误，
+        // 不能走致命退出——那会让后启动的实例直接死掉、用户只能手动重启。
+        // 按可重试处理：退避后重连，旧连接若已消失（退出/心跳超时）就会接管成功。
+        if (body.reason === "instance-conflict" || body.retryable === true) {
+          log.error?.(`同一身份已有实例在线，退避后重试连接（当前退避 ${Math.round(backoffMs / 1000)}s）`);
+          // 只关连接：close 处理器统一走 scheduleReconnect，避免这里再排一次造成并发连接
+          try { ws?.close(1000, "instance-conflict"); } catch { /* 已关闭 */ }
+          return;
+        }
         const message = `hello 被拒：${body.reason}（hubVersion ${body.hubVersion ?? "?"}）——检查 contractVersion、Agent Token 与 agentId`;
         log.error?.(message);
         stopped = true;

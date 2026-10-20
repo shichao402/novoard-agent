@@ -19,6 +19,7 @@ import { createLocalA2A } from "./local-a2a.mjs";
 import { createTargetsStore } from "./targets-store.mjs";
 import { persistAgentConfig, testConnection } from "./setup-wizard.mjs";
 import { createChatBridge } from "./chat-bridge.mjs";
+import { acquireInstanceLock } from "./instance-lock.mjs";
 import { publicCodebuddyConfig, readCodebuddyConfig, saveCodebuddyConfig } from "./codebuddy-config.mjs";
 
 const HERE = moduleHere();
@@ -32,14 +33,31 @@ function moduleHere() {
   }
 }
 
-export async function createLiteAgent({ configPath, agentDir, stateDir, log = console, env = process.env, onFatal } = {}) {
+export async function createLiteAgent(options = {}) {
+  const { configPath, env = process.env, log = console } = options;
   const config = loadAgentConfig({ configPath, env });
   if (!config.ok) throw new Error(config.reason);
+  const state = options.stateDir ?? join(process.cwd(), ".agent-state");
+  mkdirSync(state, { recursive: true });
+  // 同机同身份的第二个进程在这里被拦住：hub 侧也会拒，但那只能看到日志里的重试
+  const lock = acquireInstanceLock({ stateDir: state, agentId: config.agentId, log });
+  if (!lock.ok) throw new Error(lock.reason);
+  try {
+    const agent = await buildAgent({ ...options, config, state, log });
+    const stopInner = agent.stop;
+    agent.stop = async () => {
+      try { await stopInner(); } finally { lock.release(); }
+    };
+    return agent;
+  } catch (error) {
+    lock.release();
+    throw error;
+  }
+}
 
+async function buildAgent({ agentDir, log = console, onFatal, config, state }) {
   const dir = agentDir ?? (HERE ? join(HERE, "..", "..", "agents", config.agentId) : null);
   if (!dir) throw new Error("SEA/打包形态必须显式传 agentDir（sea-entry 以 cwd 锚定传入）");
-  const state = stateDir ?? join(process.cwd(), ".agent-state");
-  mkdirSync(state, { recursive: true });
   const auditFile = join(state, "audit.jsonl");
 
   const localAudit = (event) => {
