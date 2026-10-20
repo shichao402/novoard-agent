@@ -33,11 +33,20 @@ function createLocalTasks() {
   };
 }
 
+/** 桌面壳页面来源：Windows 的 WebView 用 http(s)://tauri.localhost，
+ *  macOS/Linux 则用自定义 scheme（tauri://localhost、ipc://localhost）——两者的 hostname 都是 localhost，
+ *  只比对 hostname 会把 macOS 的壳页面误判成跨站，故单独按 scheme 识别。 */
 const DESKTOP_SHELL_HOSTS = new Set(["tauri.localhost", "ipc.localhost"]);
+const DESKTOP_SHELL_SCHEMES = new Set(["tauri:", "ipc:"]);
+
+function isDesktopShellOrigin(parsed) {
+  if (DESKTOP_SHELL_SCHEMES.has(parsed.protocol)) return isLoopbackHost(parsed.hostname);
+  return DESKTOP_SHELL_HOSTS.has(parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase());
+}
 
 /** 写端点同源校验（localhost HTTP 服务标准加固，setup 向导复用导出）：Host 必须本机回环；带 Origin 时必须同源。
  *  挡跨站表单 POST（浏览器不给跨域 PUT 发简单请求预检外的都带 Origin）与 DNS rebinding。
- *  桌面壳页面来自 tauri.localhost，只在请求 Host 已是回环时放行。 */
+ *  桌面壳页面来自 tauri.localhost / tauri://localhost，只在请求 Host 已是回环时放行。 */
 export function sameOrigin(req, { allowRemote = false } = {}) {
   let host = String(req.headers.host ?? "");
   if (host.startsWith("[")) host = host.slice(0, host.indexOf("]") + 1); // [::1] / [::1]:port
@@ -50,14 +59,15 @@ export function sameOrigin(req, { allowRemote = false } = {}) {
   }
   const origin = req.headers.origin;
   if (origin) {
-    let originHost = "";
+    let parsed;
     try {
-      originHost = new URL(origin).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+      parsed = new URL(origin);
     } catch {
       return false;
     }
+    const originHost = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     if (originHost === hostname) return true;
-    if (isLoopbackHost(hostname) && DESKTOP_SHELL_HOSTS.has(originHost)) return true;
+    if (isLoopbackHost(hostname) && isDesktopShellOrigin(parsed)) return true;
     return false;
   }
   return true;
@@ -67,13 +77,14 @@ export function sameOrigin(req, { allowRemote = false } = {}) {
 export function handleDesktopCors(req, res) {
   const origin = req.headers.origin;
   if (!origin) return false;
-  let originHost = "";
+  let parsed;
   try {
-    originHost = new URL(origin).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    parsed = new URL(origin);
   } catch {
-    originHost = "";
+    parsed = null;
   }
-  const allowed = isLoopbackHost(originHost) || DESKTOP_SHELL_HOSTS.has(originHost);
+  const originHost = parsed ? parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase() : "";
+  const allowed = isLoopbackHost(originHost) || (parsed !== null && isDesktopShellOrigin(parsed));
   if (!allowed) {
     if (req.method === "OPTIONS") {
       res.writeHead(403);

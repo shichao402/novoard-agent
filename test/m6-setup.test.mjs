@@ -226,3 +226,19 @@ test("M6F2 sameOrigin 导出：跨源 Host 拒绝，本机回环放行", () => {
   assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "http://tauri.localhost" } }), true);
   assert.equal(sameOrigin({ headers: { host: "evil.example.com", origin: "http://tauri.localhost" } }), false);
 });
+
+test("M6F2 sameOrigin 桌面壳：macOS/Linux 自定义 scheme 放行，其它 scheme 仍拒绝", () => {
+  // macOS/Linux 的 WebView 页面 origin 是自定义 scheme，hostname 仍是 localhost
+  assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "tauri://localhost" } }), true);
+  assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "ipc://localhost" } }), true);
+  assert.equal(sameOrigin({ headers: { host: "localhost:39870", origin: "tauri://localhost" } }), true);
+  // 壳页面 origin 只在请求 Host 已是回环时放行，非回环 Host 一律拒绝
+  assert.equal(sameOrigin({ headers: { host: "evil.example.com", origin: "tauri://localhost" } }), false);
+  assert.equal(sameOrigin({ headers: { host: "192.168.1.9:39870", origin: "tauri://localhost" } }), false);
+  // 非桌面壳的自定义 scheme 不得借壳通过
+  assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "app://localhost" } }), false);
+  assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "tauri://evil.example.com" } }), false);
+  // 远程模式下壳 origin 仍只在 Host 为回环时放行（桌面壳只连本机）
+  assert.equal(sameOrigin({ headers: { host: "192.168.1.9:39870", origin: "tauri://localhost" } }, { allowRemote: true }), false);
+  assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "tauri://localhost" } }, { allowRemote: true }), true);
+});

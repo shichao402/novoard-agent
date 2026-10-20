@@ -20,3 +20,6 @@ agents/
 agent.json
 .contract-ssot/
 .DS_Store
+
+# 本机运行态日志
+logs/
