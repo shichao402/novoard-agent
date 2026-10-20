@@ -34,7 +34,8 @@
     "shortDescription": "Novoard federated execution agent",
     "longDescription": "Desktop tray host for the Novoard federated execution agent.",
     "resources": {
-      "resources/agent-runtime/": "agent-runtime/"
+      "resources/agent-runtime/": "agent-runtime/",
+      "../dist/": "console-ui/"
     },
     "externalBin": [
       "binaries/novoard-agent"

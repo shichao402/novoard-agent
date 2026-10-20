@@ -173,6 +173,25 @@ pub fn run() {
     });
 }
 
+/// 安装包内随附的控制台静态资源（tauri.conf.json 的 resources["../dist/"] = "console-ui/"）。
+/// 命中时由 sidecar 通过 NOVOARD_UI_DIST 指向它，浏览器直连控制台才有页面。
+fn console_ui_path(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(dir) = app.path().resource_dir() {
+        let staged = dir.join("console-ui");
+        if staged.join("index.html").is_file() {
+            return Some(staged);
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist");
+        if dev.join("index.html").is_file() {
+            return Some(dev);
+        }
+    }
+    None
+}
+
 fn chat_worker_path(app: &AppHandle) -> Option<PathBuf> {
     if let Ok(dir) = app.path().resource_dir() {
         let staged = dir.join("agent-runtime").join("chat-worker.mjs");
@@ -216,6 +235,10 @@ fn spawn_sidecar(app: AppHandle, state: Arc<Supervisor>) -> Result<(), String> {
         .env("NOVOARD_LOCAL_PORT", edition::LOCAL_PORT);
     let command = match chat_worker_path(&app) {
         Some(worker) => command.env("NOVOARD_CHAT_WORKER", worker),
+        None => command,
+    };
+    let command = match console_ui_path(&app) {
+        Some(ui) => command.env("NOVOARD_UI_DIST", ui),
         None => command,
     };
     let (mut events, child) = command
