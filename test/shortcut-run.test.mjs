@@ -8,6 +8,16 @@ import { parseDuration } from "../src/duration.mjs";
 import { createRunner } from "../src/runner.mjs";
 import { createShortcutRun, pruneShortcutLogs } from "../src/shortcut-log.mjs";
 
+/** 平台无关的等待命令：先立刻输出标记再用平台自带的计时手段阻塞。
+ *  不能用 ping -n，macOS/BSD 的 ping 里 -n 是 "不解析域名"，参数会直接报错退出。 */
+const MARKER = "pause-marker";
+const PAUSE = process.platform === "win32"
+  ? `echo ${MARKER} && ping -n 2 127.0.0.1 >nul`
+  : `echo ${MARKER} && sleep 1`;
+const PAUSE_LONG = process.platform === "win32"
+  ? `echo ${MARKER} && ping -n 20 127.0.0.1 >nul`
+  : `echo ${MARKER} && sleep 20`;
+
 test("时长按秒分时天换算，不合法时用默认", () => {
   assert.equal(parseDuration("30s", 0), 30_000);
   assert.equal(parseDuration("10m", 0), 600_000);
@@ -53,12 +63,12 @@ test("同一个快捷方式默认不能重叠，主日志只留路径", async ()
         audit: "none",
         requiresApproval: false,
         notify: "never",
-        steps: [{ script: "ping -n 2 127.0.0.1" }],
+        steps: [{ script: PAUSE }],
       },
     },
   });
-  const first = runtime.launch({ taskId: "task-one", skillId: "echo", vars: {}, steps: [{ script: "ping -n 2 127.0.0.1" }] });
-  const second = runtime.launch({ taskId: "task-two", skillId: "echo", vars: {}, steps: [{ script: "ping -n 2 127.0.0.1" }] });
+  const first = runtime.launch({ taskId: "task-one", skillId: "echo", vars: {}, steps: [{ script: PAUSE }] });
+  const second = runtime.launch({ taskId: "task-two", skillId: "echo", vars: {}, steps: [{ script: PAUSE }] });
   assert.equal(first.ok, true);
   assert.match(first.log, /^shortcuts\/echo\/task-one\.jsonl$/);
   assert.equal(second.ok, false);
@@ -66,11 +76,11 @@ test("同一个快捷方式默认不能重叠，主日志只留路径", async ()
   const joined = lines.join("\n");
   assert.match(joined, /\[shortcut\] 开始 target=echo task=task-one log=shortcuts\/echo\/task-one\.jsonl/);
   assert.match(joined, /\[shortcut\] 拒绝 target=echo task=task-two 并发已满（1\/1）/);
-  assert.equal(joined.includes("ping"), false);
+  assert.equal(joined.includes(MARKER), false);
   await new Promise((resolve) => setTimeout(resolve, 2500));
   assert.match(lines.join("\n"), /\[shortcut\] 结束 target=echo task=task-one state=completed/);
   const internal = readFileSync(join(root, "echo", "task-one.jsonl"), "utf8");
-  assert.match(internal, /ping/);
+  assert.match(internal, new RegExp(MARKER));
   assert.equal(existsSync(join(root, "echo", "task-two.jsonl")), false);
 });
 
@@ -85,11 +95,11 @@ test("并发设为 2 时同一次快捷方式可以重叠", async () => {
         audit: "none",
         requiresApproval: false,
         notify: "never",
-        steps: [{ script: "ping -n 2 127.0.0.1" }],
+        steps: [{ script: PAUSE }],
       },
     },
   });
-  const steps = [{ script: "ping -n 2 127.0.0.1" }];
+  const steps = [{ script: PAUSE }];
   const first = runtime.launch({ taskId: "task-a", skillId: "echo", vars: {}, steps });
   const second = runtime.launch({ taskId: "task-b", skillId: "echo", vars: {}, steps });
   assert.equal(first.ok, true);
@@ -101,13 +111,13 @@ test("运行超时会停掉快捷方式，超时细节不进主日志", async ()
   const lines = [];
   const outputs = [];
   const result = await createRunner({
-    steps: [{ script: "ping -n 8 127.0.0.1" }],
+    steps: [{ script: PAUSE_LONG }],
     timeoutMs: 400,
     onOutput(stream, text) { outputs.push(`${stream}:${text}`); },
   }).run();
   assert.equal(result.ok, false);
   assert.equal(result.stderr, "运行超时");
-  assert.equal(outputs.some((line) => line.includes("ping")), true);
+  assert.equal(outputs.some((line) => line.includes(MARKER)), true);
 
   const root = mkdtempSync(join(tmpdir(), "novoard-timeout-"));
   const runtime = createAgentRuntime({
@@ -121,7 +131,7 @@ test("运行超时会停掉快捷方式，超时细节不进主日志", async ()
         audit: "none",
         requiresApproval: false,
         notify: "never",
-        steps: [{ script: "ping -n 20 127.0.0.1" }],
+        steps: [{ script: PAUSE_LONG }],
       },
     },
   });
@@ -129,12 +139,12 @@ test("运行超时会停掉快捷方式，超时细节不进主日志", async ()
     taskId: "task-hang",
     skillId: "hang",
     vars: {},
-    steps: [{ script: "ping -n 20 127.0.0.1" }],
+    steps: [{ script: PAUSE_LONG }],
   });
   assert.equal(launched.ok, true);
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const joined = lines.join("\n");
   assert.match(joined, /state=failed/);
-  assert.equal(joined.includes("ping"), false);
+  assert.equal(joined.includes(MARKER), false);
   assert.match(readFileSync(join(root, "hang", "task-hang.jsonl"), "utf8"), /运行超时/);
 });

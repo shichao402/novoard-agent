@@ -26,21 +26,26 @@ test("会话可以创建、追加、列出和删除", () => {
   }
 });
 
-test("打包后的 Agent 从 PATH 找 Node，不调用 where.exe", () => {
+test("打包后的 Agent 从 PATH 找 Node，跳过 WindowsApps 目录", () => {
   const dir = mkdtempSync(join(tmpdir(), "novoard-node-"));
   try {
+    // 宿主可执行文件不是 node 本身时要从 PATH 找同平台的 node，文件名与分隔符都随平台变
+    const spec = process.platform === "win32"
+      ? { node: "node.exe", host: "novoard-agent.exe", sep: ";" }
+      : { node: "node", host: "novoard-agent", sep: ":" };
     const store = join(dir, "WindowsApps");
     const real = join(dir, "nodejs");
     mkdirSync(store);
     mkdirSync(real);
-    writeFileSync(join(store, "node.exe"), "");
-    writeFileSync(join(real, "node.exe"), "");
+    writeFileSync(join(store, spec.node), "");
+    writeFileSync(join(real, spec.node), "");
+    const executable = join(dir, spec.host);
     const found = locateNode(
-      { PATH: `${store};${real}` },
-      { executable: join(dir, "novoard-agent.exe") },
+      { PATH: `${store}${spec.sep}${real}` },
+      { executable },
     );
-    assert.equal(found, join(real, "node.exe"));
-    assert.equal(locateNode({ PATH: store }, { executable: join(dir, "novoard-agent.exe") }), null);
+    assert.equal(found, join(real, spec.node));
+    assert.equal(locateNode({ PATH: store }, { executable }), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
