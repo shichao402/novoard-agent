@@ -1,8 +1,9 @@
 /**
  * target 定义集合校验（agent 仓版）：
  * 纪律二（CI 门禁）：本仓 fixtures/ 下样例 + 用户提供定义走 src/contract/schemas/target.json
- * 与 hub 运行期同一契约。舰队成员的真实 targets.yaml（mac-work / mac-home / intranet-weekly）
- * 是各成员机器上的运行数据，定义与校验门禁留在 hub 仓（agents/ 目录）。
+ * 与 hub 运行期同一契约。
+ * 2026-10-20 M9+ 收口：舰队真实定义（mac-work / mac-home）的校验门禁从 hub 仓 agents/ 迁入本仓
+ * fixtures/（定义在定义产生的一侧校验），hub 仓随之删除 agents/ 与 targets.test.mjs。
  * 模板结构 = steps + vars 默认值（契约 §1.3），无 title/expose 等 target 级字段，
  * 故模板校验走"steps 数组逐元素套 step schema + vars 类型断言"，不整体套 target schema。
  */
@@ -79,6 +80,17 @@ test("模板 {{var}} 插值无来源即失败（契约 §1.2：不静默替换�
       }
     }
   }
+});
+
+test("两台 Mac 共用同一份 deploy-webapp 模板（PRD-5 F2 模板机制验收场景）", () => {
+  const w = readFileSync(join(FIXTURES_DIR, "mac-work", "templates", "deploy-webapp.yaml"), "utf8");
+  const h = readFileSync(join(FIXTURES_DIR, "mac-home", "templates", "deploy-webapp.yaml"), "utf8");
+  assert.equal(w, h, "两台 Mac 的 deploy-webapp 模板内容必须逐字节一致");
+  const wk = parse(readFileSync(join(FIXTURES_DIR, "mac-work", "targets.yaml"), "utf8"));
+  const hm = parse(readFileSync(join(FIXTURES_DIR, "mac-home", "targets.yaml"), "utf8"));
+  // skill id 全局唯一（hub 命名空间）：两台 Mac 的同能力 target 各持独立 id（M7 后 mac-work 加 -work 后缀）
+  assert.ok(wk.targets["dev-build-investm-work"], "mac-work 必须有 dev-build-investm-work target");
+  assert.ok(hm.targets["dev-build-investm"], "mac-home 必须有 dev-build-investm target");
 });
 
 test("expose/audit/notify/requiresApproval 字段语义抽查（契约 §1.1 字面值）", () => {

@@ -186,7 +186,7 @@ test("M5 cancel：运行中任务取消 → canceled", async () => {
 });
 
 test("M5 F5 open-instance 模板：装载/展开通过，模板引用合法（fixture）", async () => {
-  // fixture 化：模板结构性验证用自带样例（舰队身份定义在 hub 仓 agents/，不随 agent 仓分发）
+  // fixture 化：模板结构性验证用自带样例（舰队真实定义已迁入本仓 test/fixtures/mac-*）
   const agentDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "tpl-agent");
   const loaded = loadTargets({ agentDir });
   assert.ok(loaded.ok, loaded.reason);

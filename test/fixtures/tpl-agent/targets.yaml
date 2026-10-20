@@ -1,4 +1,4 @@
-# fixture：模板机制结构性验证（舰队真实定义在 hub 仓 agents/）
+# fixture：模板机制结构性验证（舰队真实定义见同级 mac-home / mac-work fixtures）
 targets:
   open-demo:
     title: 打开演示应用

@@ -1,0 +1,48 @@
+# fixture：mac-home（家里 Mac · dev builder）真实 target 定义
+# 来源：hub 仓 agents/mac-home/targets.yaml（2026-10-20 迁入，镜像运行期数据目录同名定义）
+# 契约 §1 同 mac-work；本机承接 Mac B 角色（合盖/离线时的离线拒绝验收场景，PRD-5 F4 / AC4）
+# 与 mac-work 共用 deploy-webapp 模板，vars 填机器差异：homebrew 路径与拉取方式（ssh 拉取，工位走 https）
+
+targets:
+  dev-build-investm:
+    title: 构建 InvestM dev 并部署本机
+    template: deploy-webapp
+    vars:
+      repo: InvestM
+      repoDir: /Users/firoyang/workspace/InvestM
+      port: 5173
+    expose: a2a
+    audit: summary
+    requiresApproval: false
+    notify: always
+    offline: queue          # M2：离线触发不拒绝，入队等本机上线自动补下发
+    offlineTtl: 2h
+
+  smoke-test:
+    title: 冒烟自检（echo + 环境确认）
+    template: noop
+    vars: {}
+    expose: a2a
+    audit: summary
+    requiresApproval: false
+    notify: on-failure       # M3 AC2 验收：成功执行不通知，失败才通知
+
+  open-investm:
+    title: 打开 InvestM 实例（不构建）
+    template: open-instance
+    vars:
+      url: http://localhost:5173
+    expose: a2a
+    audit: summary
+    requiresApproval: false
+    notify: on-failure
+
+  approval-demo:
+    title: 审批门演示（AC2 验收）
+    steps:
+      - script: echo "approval-gate-passed"
+    vars: {}
+    expose: a2a
+    audit: summary
+    requiresApproval: true
+    notify: on-failure

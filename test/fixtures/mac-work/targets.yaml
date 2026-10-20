@@ -1,0 +1,17 @@
+# fixture：mac-work（工位 Mac · dev builder）真实 target 定义
+# 来源：hub 仓 agents/mac-work/targets.yaml（2026-10-20 迁入，镜像运行期数据目录同名定义）
+# 契约 §1：定义时决定能力与待遇，运行时查表（ADR-0005）；schema 见 docs/architecture/schemas/target.json
+# 与 mac-home 共用 deploy-webapp 模板，vars 填机器差异（PRD-5 F2 模板机制试点验收场景）
+
+targets:
+  dev-build-investm-work:
+    title: 构建 InvestM dev 并部署本机（工位 Mac）
+    template: deploy-webapp
+    vars:
+      repo: InvestM
+      repoDir: /Users/firoyang/workspace/InvestM
+      port: 5173
+    expose: a2a
+    audit: summary
+    requiresApproval: false
+    notify: always

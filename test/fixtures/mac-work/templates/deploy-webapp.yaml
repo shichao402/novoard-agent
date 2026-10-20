@@ -1,0 +1,20 @@
+# 共用 stepTemplate：deploy-webapp（两台 Mac dev builder 共用，PRD-5 F2）
+# 结构与 target 的 steps + vars 默认值相同（契约 §1.3）；{{var}} 插值优先级：
+#   触发时传入 vars > target vars > 模板默认值
+# steps 覆盖：pull → 构建 → 部署本机 → 健康检查 → 打开自测页（PRD-5 F2 五步）
+# repo / repoDir 不设默认值：两台机器路径不同，由 target vars 填机器差异（契约 §1.3 试点验收场景）
+
+vars:
+  pullMethod: https
+  port: 5173
+  buildCmd: pnpm build
+  deployDir: ""
+
+steps:
+  - script: git -C "{{repoDir}}" pull --ff-only
+  - script: "{{buildCmd}}"
+    cwd: "{{repoDir}}"
+  - script: test -n "{{deployDir}}" && rsync -a --delete "{{repoDir}}/dist/" "{{deployDir}}/" || echo "dev-server 模式，跳过静态部署"
+    cwd: "{{repoDir}}"
+  - script: curl -fsS --max-time 10 http://localhost:{{port}}/ >/dev/null && echo health-ok
+  - openApp: "http://localhost:{{port}}"

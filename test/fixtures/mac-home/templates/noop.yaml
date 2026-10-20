@@ -1,0 +1,7 @@
+# noop：空操作模板（冒烟/规则联动验收道具，M3 AC2/AC3）
+# 契约 §1.3 step schema：script/cwd/env 三字段，无 name
+
+vars: {}
+
+steps:
+  - script: echo "novoard smoke ok at $(date)"
