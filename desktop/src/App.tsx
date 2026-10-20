@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { LayoutDashboard, MessageSquare, ScrollText, Settings, SquareTerminal, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EditionMark } from "@/components/edition-mark";
@@ -54,6 +55,17 @@ export function App() {
     void listen<{ view: View }>("client-nav", (event) => {
       if (NAV.some((item) => item.id === event.payload.view)) setView(event.payload.view);
     }).then((stop) => unlisten.push(stop));
+    // sidecar 就绪可能早于本组件挂载（事件已发完），监听注册后补取一次缓存。
+    void invoke<Endpoint | null>("agent_endpoint")
+      .then((cached) => {
+        if (!cached) return;
+        setEndpoint((current) => current ?? cached);
+        setNoticeError(false);
+        setNotice("");
+      })
+      .catch(() => {
+        // 非 Tauri 环境（浏览器直开控制台）没有该命令，忽略。
+      });
     return () => unlisten.forEach((stop) => stop());
   }, []);
 

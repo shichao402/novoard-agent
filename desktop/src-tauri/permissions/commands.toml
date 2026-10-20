@@ -9,6 +9,11 @@ description = "重启本机 Agent"
 commands.allow = ["restart_agent"]
 
 [[permission]]
+identifier = "allow-agent-endpoint"
+description = "读取已缓存的 Agent 端点"
+commands.allow = ["agent_endpoint"]
+
+[[permission]]
 identifier = "allow-autostart-enabled"
 description = "读取登录时启动状态"
 commands.allow = ["autostart_enabled"]

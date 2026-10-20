@@ -8,6 +8,7 @@
     "core:event:default",
     "allow-read-logs",
     "allow-restart-agent",
+    "allow-agent-endpoint",
     "allow-autostart-enabled",
     "allow-set-autostart",
     "allow-open-log-dir",

@@ -34,6 +34,8 @@ struct Supervisor {
     restart_requested: AtomicBool,
     restart_attempts: AtomicUsize,
     open_on_ready: AtomicBool,
+    /// 最近一次 ui-ready 事件。WebView 挂载晚于 sidecar 就绪时，靠它补发，避免永久卡在启动中。
+    last_ready: Mutex<Option<HostEvent>>,
 }
 
 impl Supervisor {
@@ -45,11 +47,12 @@ impl Supervisor {
             restart_requested: AtomicBool::new(false),
             restart_attempts: AtomicUsize::new(0),
             open_on_ready: AtomicBool::new(open_on_ready),
+            last_ready: Mutex::new(None),
         })
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HostEvent {
     #[serde(rename = "type")]
@@ -99,6 +102,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_logs,
             restart_agent,
+            agent_endpoint,
             autostart_enabled,
             set_autostart,
             open_log_dir
@@ -272,6 +276,9 @@ fn handle_host_line(app: &AppHandle, state: &Arc<Supervisor>, line: &str) {
             }
             state.fatal.store(false, Ordering::SeqCst);
             state.restart_attempts.store(0, Ordering::SeqCst);
+            if let Ok(mut slot) = state.last_ready.lock() {
+                *slot = Some(event.clone());
+            }
             let _ = app.emit("agent-endpoint", &event);
             if state.open_on_ready.load(Ordering::SeqCst) {
                 show_main_window(app);
@@ -714,6 +721,13 @@ fn parse_host_line(line: &str) -> Option<LogRow> {
 fn restart_agent(app: AppHandle, state: tauri::State<'_, Arc<Supervisor>>) -> Result<(), String> {
     restart_sidecar(&app, state.inner());
     Ok(())
+}
+
+/// WebView 挂载时机可能晚于 sidecar 就绪。前端挂载后调用本命令补取已缓存的
+/// ui-ready，避免事件丢失导致界面永久停在「正在启动」。
+#[tauri::command]
+fn agent_endpoint(state: tauri::State<'_, Arc<Supervisor>>) -> Option<HostEvent> {
+    state.last_ready.lock().ok().and_then(|slot| slot.clone())
 }
 
 #[tauri::command]
