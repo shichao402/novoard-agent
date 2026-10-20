@@ -20,5 +20,5 @@
       "items": { "type": "string", "pattern": "^task-" }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": true
 }

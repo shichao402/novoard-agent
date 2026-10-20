@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "novoard/frame-agent-hello-nack.json",
+  "title": "ops 帧 agent.hello.nack（hub → agent，注册被拒回执，契约 §4.2）",
+  "type": "object",
+  "required": ["type", "reason", "hubVersion"],
+  "properties": {
+    "type": { "const": "agent.hello.nack" },
+    "reason": {
+      "enum": [
+        "contract-major-mismatch",
+        "contract-schema-mismatch",
+        "agent-identity-mismatch",
+        "instance-conflict"
+      ],
+      "description": "拒绝原因。contract-major-mismatch 为主版本不匹配；contract-schema-mismatch 为 hello 帧字段级校验失败，携带 detail 便于定位"
+    },
+    "hubVersion": { "type": "string", "pattern": "^\\d+\\.\\d+$" },
+    "agentVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "hello 里带的 contractVersion 回显，便于对端确认自己发的是什么"
+    },
+    "retryable": { "type": "boolean" },
+    "detail": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "字段级校验错误的实例路径与原因，逐条列出"
+    }
+  },
+  "additionalProperties": true
+}

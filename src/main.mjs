@@ -98,6 +98,14 @@ async function buildAgent({ agentDir, log = console, onFatal, config, state }) {
   };
 
   let peer = null;
+  // 历史 agent.json 里可能写着旧版本号（升级只换二进制不重装的环境）：契约版本以代码常量为准，
+  // 这里明确告知用户该值已被取代，避免有人以为改配置文件能对齐契约（需求 8.4）
+  if (config.staleContractVersion) {
+    log.info?.(
+      `agent.json 中的 contractVersion=${config.staleContractVersion} 已被忽略：契约版本由代码常量提供（当前 ${config.contractVersion}），` +
+        `该字段不再生效，也不会被回写`,
+    );
+  }
   const tunnel = createTunnelClient({
     config,
     card: cardRef.current,

@@ -10,8 +10,9 @@ import { WebSocketServer } from "ws";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { createFrameValidator } from "../../src/contract/frames.mjs";
+import { CONTRACT_VERSION } from "../../src/contract/version.mjs";
 
-export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, error() {} } } = {}) {
+export async function createMockHub({ port = 0, tokens = {}, helloSilence = false, hubContractVersion = CONTRACT_VERSION, log = { info() {}, error() {} } } = {}) {
   const validate = createFrameValidator();
   const members = new Map(); // agentId -> { ws, card, lastSeen }
   const tasks = new Map(); // taskId -> { state, target, member, events: [] }
@@ -21,6 +22,8 @@ export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, 
   const pendingOffline = []; // hello 后需补下发的任务（模拟 M2 flush）
   const relays = [];
   const wecom = [];
+  /** 需要被 hub 拒绝的上行 taskId（测试用：验证被拒帧不无限重放） */
+  const rejectA2aTaskIds = new Set();
 
   /** 委派对齐契约：a2a 信封（taskId 信封层）+ body message/send + run 文本（agent handleDelegate 同款解析） */
   function delegate(ws, { taskId, target, vars }) {
@@ -198,6 +201,24 @@ export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, 
         const status = frame.body.params?.message?.status;
         const taskId = frame.taskId;
         const t = tasks.get(taskId);
+        // 模拟 hub 拒绝某类上行帧（契约 §4.2）：用于验证 agent 不会无限重放被拒帧
+        if (rejectA2aTaskIds.has(taskId)) {
+          ws.send(JSON.stringify({
+            v: 1,
+            kind: "ops",
+            msgId: `e-reject-${frame.msgId}`,
+            ts: new Date().toISOString(),
+            body: {
+              type: "frame.reject",
+              refMsgId: frame.msgId,
+              reason: "ops-schema-mismatch",
+              hubVersion: hubContractVersion,
+              retryable: false,
+              detail: ["只用于测试的拒绝"],
+            },
+          }));
+          return;
+        }
         if (t) {
           const state = status?.state;
           if (state && state !== "working") t.state = state;
@@ -216,6 +237,9 @@ export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, 
       }
       if (frame.body?.type === "agent.hello") {
         const hello = frame.body;
+        // 模拟旧 hub 的静默丢弃：body 校验失败只打日志、不回 nack、不断连接。
+        // agent 侧必须靠 hello 回执超时识别这种情况（需求 3.3 / 3.4）。
+        if (helloSilence) return;
         if (!validate.opsBody("agent.hello", hello).ok) {
           ws.close(4002, "hello-invalid");
           return;
@@ -227,7 +251,7 @@ export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, 
         memberId = hello.agentId;
         members.set(hello.agentId, { ws, card: hello.card, lastSeen: Date.now() });
         // 确认对齐契约 §3：ops 帧 agent.hello.ack（agent 侧据 body.type 翻 registered）
-        ws.send(JSON.stringify({ v: 1, kind: "ops", msgId: `e-helloack-${Date.now()}`, ts: new Date().toISOString(), body: { type: "agent.hello.ack", inFlightTaskIds: hello.inFlightTaskIds ?? [] } }));
+        ws.send(JSON.stringify({ v: 1, kind: "ops", msgId: `e-helloack-${Date.now()}`, ts: new Date().toISOString(), body: { type: "agent.hello.ack", inFlightTaskIds: hello.inFlightTaskIds ?? [], hubVersion: hubContractVersion } }));
         // 信封 ack 一并回（未确认帧重放机制的应答）
         ws.send(JSON.stringify({ v: 1, kind: "ack", msgId: `ack-${frame.msgId}`, dedup: false }));
         // M2 flush 模拟：hello 后补下发 pendingOffline
@@ -298,6 +322,10 @@ export async function createMockHub({ port = 0, tokens = {}, log = { info() {}, 
     /** 模拟 M2：挂起离线任务供 hello flush 验证 */
     queueOffline(task) {
       pendingOffline.push(task);
+    },
+    /** 测试用：让 hub 拒绝某个 taskId 的上行帧，验证 agent 不无限重放被拒帧 */
+    rejectA2aFor(taskId) {
+      rejectA2aTaskIds.add(taskId);
     },
   };
   // 构造即监听（对齐真实 createHub：返回时 server 已 listen，address() 可用）

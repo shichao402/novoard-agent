@@ -11,7 +11,7 @@
  * 依赖：esbuild / postject 为 devDependencies，需本机有 node 与（macOS 签名时）codesign。
  */
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { join, basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertReleaseMatches, bakeEdition, resolveEdition } from "./edition.mjs";
@@ -29,7 +29,15 @@ function argOf(name) {
 const targetPlatform = argOf("platform") ?? process.env.NOVOARD_BUILD_PLATFORM ?? process.platform;
 const targetArch = argOf("arch") ?? process.env.NOVOARD_BUILD_ARCH ?? process.arch;
 
-const SCHEMA_FILES = ["a2a-envelope.json", "frame-agent-hello.json", "frame-agent-ping.json", "frame-telemetry.json", "frame-card-update.json", "agent-card.json", "task.json", "audit-event.json", "target.json"];
+/**
+ * 契约 schema 文件清单：按目录动态发现，不维护手工清单。
+ * 新增或重命名 schema 时构建会自动跟随，避免清单漏项导致内嵌缺失。
+ */
+function schemaFiles() {
+  const files = readdirSync(SCHEMA_DIR).filter((f) => f.endsWith(".json")).sort();
+  if (files.length === 0) throw new Error(`契约 schema 目录为空：${SCHEMA_DIR}`);
+  return files;
+}
 
 function step(msg) {
   console.log(`\n▸ ${msg}`);
@@ -38,11 +46,13 @@ function step(msg) {
 /** 1. schema 内嵌模块生成（sea-entry 导入它，bundle 时进产物）。 */
 function genEmbeddedSchemas() {
   step("生成内嵌 schema 模块 build/embedded-schemas.gen.mjs");
-  const entries = SCHEMA_FILES.map((f) => JSON.parse(readFileSync(join(SCHEMA_DIR, f), "utf8")));
-  const table = Object.fromEntries(SCHEMA_FILES.map((f, i) => [f, entries[i]]));
-  const code = `/** 构建期生成（scripts/build-agent.mjs），勿手改：九张契约 schema 内嵌供 SEA 二进制。 */\nexport const EMBEDDED_SCHEMAS = ${JSON.stringify(table, null, 2)};\n`;
+  const files = schemaFiles();
+  const entries = files.map((f) => JSON.parse(readFileSync(join(SCHEMA_DIR, f), "utf8")));
+  const table = Object.fromEntries(files.map((f, i) => [f, entries[i]]));
+  const code = `/** 构建期生成（scripts/build-agent.mjs），勿手改：${files.length} 张契约 schema 内嵌供 SEA 二进制。 */\nexport const EMBEDDED_SCHEMAS = ${JSON.stringify(table, null, 2)};\n`;
   mkdirSync(BUILD, { recursive: true });
   writeFileSync(join(BUILD, "embedded-schemas.gen.mjs"), code, "utf8");
+  console.log(`  内嵌 ${files.length} 张：${files.join(", ")}`);
 }
 
 /** 2. esbuild bundle（CJS，ws 原生可选依赖 external 由运行时 try/catch 回退）。程序化 API：跨平台无 .bin shim 差异（Windows .bin 是 .cmd，spawn 会 ENOENT）。 */

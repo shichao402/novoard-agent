@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "novoard/frame-reject.json",
+  "title": "ops 帧 frame.reject（hub → agent，通用帧拒绝回执，契约 §4.2）",
+  "type": "object",
+  "required": ["type", "refMsgId", "reason", "hubVersion"],
+  "properties": {
+    "type": { "const": "frame.reject" },
+    "refMsgId": {
+      "type": "string",
+      "pattern": "^e-[A-Za-z0-9-]+$",
+      "description": "被拒帧的信封 msgId，供对端把拒绝关联回具体发送物"
+    },
+    "reason": {
+      "enum": ["ops-schema-mismatch", "unknown-ops-type", "frame-too-large", "internal-error"],
+      "description": "拒绝原因。ops-schema-mismatch 为帧 body 不符合 schema；unknown-ops-type 为 type 不在 ops 枚举内"
+    },
+    "hubVersion": { "type": "string", "pattern": "^\\d+\\.\\d+$" },
+    "retryable": { "type": "boolean" },
+    "detail": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "字段级错误的实例路径与原因，逐条列出"
+    }
+  },
+  "additionalProperties": true
+}

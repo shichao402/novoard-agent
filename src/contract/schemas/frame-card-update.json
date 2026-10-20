@@ -8,5 +8,5 @@
     "type": { "const": "card.update" },
     "card": { "$ref": "agent-card.json" }
   },
-  "additionalProperties": false
+  "additionalProperties": true
 }

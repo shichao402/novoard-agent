@@ -8,5 +8,5 @@
     "type": { "const": "agent.ping" },
     "ts": { "type": "string", "format": "date-time" }
   },
-  "additionalProperties": false
+  "additionalProperties": true
 }

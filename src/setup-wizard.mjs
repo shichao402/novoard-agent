@@ -116,7 +116,8 @@ export function persistAgentConfig({ dir, hubUrl, agentId, agentToken, localPort
     agentId: id,
     hubUrl: norm.url,
     agentToken: token,
-    contractVersion: "2.1",
+    // 不写 contractVersion：契约版本由 src/contract/version.mjs 提供，
+    // 写进 agent.json 会在升级后变成固定旧值，导致只换二进制不重装的环境握手失败（需求 4）。
     localPort: portNumber,
     uiHost: ui.host,
     ...(ui.remote ? { uiToken: ui.token } : {}),

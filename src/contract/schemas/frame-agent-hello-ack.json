@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "novoard/frame-agent-hello-ack.json",
+  "title": "ops 帧 agent.hello.ack（hub → agent，注册成功确认，契约 §4.2）",
+  "type": "object",
+  "required": ["type", "inFlightTaskIds"],
+  "properties": {
+    "type": { "const": "agent.hello.ack" },
+    "inFlightTaskIds": {
+      "type": "array",
+      "description": "hub 侧仍在途、要求 agent 对账的任务 id（契约 §4.4）",
+      "items": { "type": "string", "pattern": "^task-" }
+    },
+    "hubVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "hub 侧契约版本，便于 agent 记录双方版本（契约 §8 可观测性）"
+    }
+  },
+  "additionalProperties": true
+}

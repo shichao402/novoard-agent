@@ -15,6 +15,12 @@ import { reportAbandonedRuns } from "./run-trace.mjs";
 const PING_INTERVAL_MS = 25_000;
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 30_000;
+/**
+ * hello 回执等待上限。
+ * hub 在契约不兼容时应当回 nack；若完全收不到任何回执，说明对端未按契约回应
+ * （典型：旧 hub 的字段级校验失败分支静默丢弃）。超时后必须明确报告，不能保持静默连接。
+ */
+const HELLO_ACK_TIMEOUT_MS = 10_000;
 
 function callerParts(parts, text) {
   const outgoing = [];
@@ -92,8 +98,11 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
     return msgId;
   }
 
+  /** 上行 ops 帧。返回 msgId：两侧日志都记这个值，出问题时按同一 id 关联（契约 §0 可观测性）。 */
   function ops(body) {
-    send({ v: 1, kind: "ops", msgId: newMsgId(), ts: new Date().toISOString(), body });
+    const msgId = newMsgId();
+    send({ v: 1, kind: "ops", msgId, ts: new Date().toISOString(), body });
+    return msgId;
   }
 
   /** 把自然语言回复、完成报告或在场信号送回调用方。Hub 按任务上的调用方转发。 */
@@ -198,6 +207,9 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
     await connectOnce();
   }
 
+  /** 本次 hello 帧的 msgId：ack/nack 都带上它回显，供两侧日志关联（契约 §0 可观测性）。 */
+  let helloMsgId = "";
+
   function connectOnce() {
     return new Promise((resolve) => {
       let settled = false;
@@ -208,7 +220,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
           ...[...pending.values()].map((envelope) => envelope.taskId),
           ...(runner.runningTasks ?? []).map((task) => task.id),
         ].filter(Boolean))];
-        ops({
+        helloMsgId = ops({
           type: "agent.hello",
           contractVersion,
           agentId,
@@ -216,12 +228,15 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
           inFlightTaskIds,
           ...(bootId ? { bootId } : {}),
         });
+        log.info?.(`发出 hello（msgId=${helloMsgId}，本端 contractVersion=${contractVersion}，hub=${hubHttp}）`);
+        armHelloDeadline();
         resolve(true);
       });
       ws.on("message", handleDownlink);
       ws.on("close", () => {
         connected = false;
         registered = false;
+        clearHelloDeadline();
         if (stopped) return;
         // 断线重连：在途任务继续跑，终态帧在缓存里等重连重放（契约 §4.4 第 1-2 条）
         scheduleReconnect();
@@ -245,12 +260,50 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
     setTimeout(connectOnce, backoff()).unref?.();
   }
 
+  /** hello 回执超时定时器（收到 ack/nack 时清除）。 */
+  let helloTimer = null;
+
+  function clearHelloDeadline() {
+    if (helloTimer) {
+      clearTimeout(helloTimer);
+      helloTimer = null;
+    }
+  }
+
+  /**
+   * 发送 hello 后开始等待回执（契约 §4.2，需求 3.3/3.4）。
+   * 超时窗口内未收到 ack 也未收到 nack，意味着对端没有按契约回应：
+   * 常见于旧 hub 的 body 校验失败分支静默丢弃（进程正常、连接看着也正常、但所有任务都失败）。
+   * 这里主动报告「疑似契约不兼容」，而不是让连接挂着看起来正常。
+   */
+  function armHelloDeadline() {
+    clearHelloDeadline();
+    helloTimer = setTimeout(() => {
+      helloTimer = null;
+      if (registered || stopped) return;
+      const message =
+        `hello 未在 ${HELLO_ACK_TIMEOUT_MS / 1000}s 内收到回执：疑似契约不兼容` +
+        `（本端 contractVersion=${contractVersion}）——对端可能静默丢弃了 hello 帧，` +
+        `请核对 hub 版本与契约文档 §0，或查看 hub 侧日志`;
+      log.error?.(message);
+      stopped = true;
+      try { ws?.close(1000, "hello-timeout"); } catch { /* 已关闭 */ }
+      if (onFatal) {
+        Promise.resolve(onFatal({ code: "hello-timeout", message, detail: { contractVersion } })).catch((error) => {
+          log.error?.(`fatal 回调失败：${error?.message ?? error}`);
+        });
+      }
+    }, HELLO_ACK_TIMEOUT_MS);
+    helloTimer.unref?.();
+  }
+
   function handleDownlink(raw) {
     let frame;
     try { frame = JSON.parse(String(raw)); } catch { return; }
     if (frame.kind === "ops") {
       const body = frame.body ?? {};
       if (body.type === "agent.hello.nack") {
+        clearHelloDeadline();
         // instance-conflict：同身份已有别的实例在线（契约 §4.1）。这不是配置错误，
         // 不能走致命退出——那会让后启动的实例直接死掉、用户只能手动重启。
         // 按可重试处理：退避后重连，旧连接若已消失（退出/心跳超时）就会接管成功。
@@ -260,7 +313,11 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
           try { ws?.close(1000, "instance-conflict"); } catch { /* 已关闭 */ }
           return;
         }
-        const message = `hello 被拒：${body.reason}（hubVersion ${body.hubVersion ?? "?"}）——检查 contractVersion、Agent Token 与 agentId`;
+        // 契约不兼容类拒绝：把 hub 侧给出的字段级 detail 一并打印，便于直接定位是哪一侧落后
+        const detailText = Array.isArray(body.detail) && body.detail.length ? `；字段错误：${body.detail.join("; ")}` : "";
+        const message =
+          `hello 被拒：${body.reason}（msgId=${helloMsgId || "?"}，hubVersion ${body.hubVersion ?? "?"}，` +
+          `hub 回显本端 ${body.agentVersion ?? contractVersion}）——检查 contractVersion、Agent Token 与 agentId${detailText}`;
         log.error?.(message);
         stopped = true;
         try { ws?.close(); } catch {}
@@ -274,6 +331,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
         return;
       }
       if (body.type === "agent.hello.ack") {
+        clearHelloDeadline();
         registered = true;
         backoffMs = RETRY_BASE_MS;
         // 重连对账：重放全部未确认上行帧（同 msgId，hub 幂等）
@@ -283,9 +341,33 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
           runningTaskIds: (runner.runningTasks ?? []).map((task) => task.id),
           onTrace: (taskId, event) => uplink(taskId, runTraceNotification(taskId, event)),
         });
-        log.info?.(`已注册到 hub（agentId=${agentId}，重放 ${pending.size} 个未确认上行帧）`);
+        // 双方版本一并落日志：单侧升级后出现行为差异时，先看这两行就知道两侧各停在哪个契约（契约 §0 可观测性）
+        log.info?.(
+          `已注册到 hub（msgId=${helloMsgId || "?"}，agentId=${agentId}，本端 contractVersion=${contractVersion}，` +
+            `hubVersion ${body.hubVersion ?? "未上报"}，重放 ${pending.size} 个未确认上行帧）`,
+        );
+        return;
       }
-      return;
+      if (body.type === "frame.reject") {
+        // hub 明确拒绝了某个上行帧（契约 §4.2）：记录原因与关联 msgId，便于定位是哪一帧、哪个字段
+        const detailText = Array.isArray(body.detail) && body.detail.length ? `；${body.detail.join("; ")}` : "";
+        log.error?.(
+          `上行帧被 hub 拒绝：reason=${body.reason} refMsgId=${body.refMsgId ?? "?"}（hubVersion ${body.hubVersion ?? "?"}）${detailText}`,
+        );
+        // 被拒的 a2a 帧必须从重放队列剔除：否则每次重连都会把同一帧再发一遍，
+        // 永远被拒、永远重放，日志被刷满且旧帧永远出不了队。
+        if (body.refMsgId && pending.has(body.refMsgId)) {
+          pending.delete(body.refMsgId);
+          persistPending();
+          const dropped = `已丢弃被拒帧 refMsgId=${body.refMsgId}，不再重放`;
+          if (body.reason === "unknown-ops-type" || body.reason === "ops-schema-mismatch") {
+            log.error?.(`${dropped}——这是本端比 hub 新的信号，请对照契约 §0 确认该帧是否已在本端先落`);
+          } else {
+            log.error?.(dropped);
+          }
+        }
+        return;
+      }
     }
     if (frame.kind === "a2a") {
       handleDelegate(frame);

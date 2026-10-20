@@ -13,22 +13,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout pinned Hub contract SSOT
+      # 契约门禁口径：比对当前 SSOT，而非固定历史提交（需求 6）。
+      # 固定提交只能证明「与那个旧提交一致」，Hub 后续改动无法被发现。
+      - name: Checkout Hub contract SSOT (current)
         uses: actions/checkout@v4
         with:
           repository: shichao402/Novoard
-          ref: a2eea2d962e528230de6b8b524917f6601b1a8b8
+          ref: main
           path: .contract-ssot
           sparse-checkout: |
             docs/architecture/contracts.md
             docs/architecture/schemas
             src/frames.mjs
+            src/contract/version.mjs
+            conformance
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      # NOVOARD_HUB_ROOT 让门禁与共享夹具都以当前 SSOT 为准；
+      # 未设置时门禁会跳过跨仓比对与夹具，CI 必须设置以保证门禁完整。
       - run: npm test
         env:
           NOVOARD_HUB_ROOT: .contract-ssot

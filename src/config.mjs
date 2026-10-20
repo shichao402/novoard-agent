@@ -6,6 +6,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { edition } from "./edition.mjs";
+import { CONTRACT_VERSION } from "./contract/version.mjs";
 import { validateUiConfig } from "./ui-access.mjs";
 
 /** 向导端口。未显式指定时用本版本的固定端口，不再用 0 让系统随机分配。 */
@@ -44,7 +45,12 @@ export function loadAgentConfig({ configPath, env = process.env } = {}) {
   const agentId = String(data.agentId ?? env.NOVOARD_AGENT_ID ?? "").trim();
   const hubUrl = String(data.hubUrl ?? env.NOVOARD_HUB_URL ?? "").trim();
   const agentToken = String(data.agentToken ?? env.NOVOARD_AGENT_TOKEN ?? "").trim();
-  const contractVersion = String(data.contractVersion ?? env.NOVOARD_CONTRACT_VERSION ?? "2.1").trim();
+  // 契约版本来自契约常量（src/contract/version.mjs），不接受配置文件或环境变量覆盖（需求 4）。
+  // 理由：agent.json 一旦写入就会被持久化，契约升级后只换二进制不重装的环境会永久停在旧值上握手失败。
+  const contractVersion = CONTRACT_VERSION;
+  const staleContractVersion = data.contractVersion !== undefined && String(data.contractVersion).trim() !== contractVersion
+    ? String(data.contractVersion).trim()
+    : "";
   // UI 监听项允许环境变量显式覆盖文件：桌面壳据此强制回环，Linux 可按需开放测试入口。
   const localPort = Number(env.NOVOARD_LOCAL_PORT ?? data.localPort ?? data.uiPort ?? 0) || 0;
   const uiHost = String(env.NOVOARD_UI_HOST ?? data.uiHost ?? "127.0.0.1").trim();
@@ -67,6 +73,8 @@ export function loadAgentConfig({ configPath, env = process.env } = {}) {
     uiHost: ui.host,
     uiToken: ui.token,
     uiRemote: ui.remote,
+    // 历史持久化版本号：仅用于调用方提示，不参与握手（需求 4.2、8.4）
+    staleContractVersion,
     file,
   };
 }

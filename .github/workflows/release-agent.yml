@@ -16,16 +16,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout pinned Hub contract SSOT
+      # 与 ci.yml 同口径：发布前对齐当前 SSOT，而非固定历史提交（需求 6）。
+      - name: Checkout Hub contract SSOT (current)
         uses: actions/checkout@v4
         with:
           repository: shichao402/Novoard
-          ref: a2eea2d962e528230de6b8b524917f6601b1a8b8
+          ref: main
           path: .contract-ssot
           sparse-checkout: |
             docs/architecture/contracts.md
             docs/architecture/schemas
             src/frames.mjs
+            src/contract/version.mjs
+            conformance
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@v4
         with:

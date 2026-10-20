@@ -8,7 +8,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, readdirSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -197,8 +197,8 @@ test("M6F2 e2e：向导保存 → agent 热启动 → hub 注册 → editor 改 
 });
 
 test("M6F2 schemas 内嵌等价：注入 globalThis 后 createFrameValidator 校验行为与读盘一致", async () => {
-  const schemaFiles = ["a2a-envelope.json", "frame-agent-hello.json", "frame-agent-ping.json", "frame-telemetry.json", "frame-card-update.json", "agent-card.json", "task.json", "audit-event.json", "target.json"];
   const schemaDir = join(process.cwd(), "src", "contract", "schemas");
+  const schemaFiles = readdirSync(schemaDir).filter((f) => f.endsWith(".json")).sort();
   const table = Object.fromEntries(schemaFiles.map((f) => [f, JSON.parse(readFileSync(join(schemaDir, f), "utf8"))]));
 
   // 直接以 schemas 参数注入（等价于 sea-entry 的 globalThis 路径，不污染全局做两轮）

@@ -20,7 +20,9 @@
     "desktop:mac-release-deploy": "node scripts/deploy-macos-release.mjs",
     "release:sync-version": "node scripts/sync-release-version.mjs",
     "contract-gate": "node scripts/check-contract-copy.mjs",
-    "test": "npm run contract-gate && node --test \"test/*.mjs\""
+    "contract:gen-types": "node scripts/gen-contract-types.mjs",
+    "contract:check-types": "node scripts/gen-contract-types.mjs --check",
+    "test": "npm run contract-gate && npm run contract:check-types && node --test \"test/*.mjs\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
