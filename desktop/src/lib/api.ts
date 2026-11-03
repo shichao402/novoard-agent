@@ -295,6 +295,41 @@ export function getShortcutLog(base: string, id: string, taskId: string, page = 
   return request<LogPage & { ok: boolean; log: string }>(base, `/api/shortcuts/${encodeURIComponent(id)}/runs/${encodeURIComponent(taskId)}?page=${page}`);
 }
 
+export type UpdatePhase =
+  | "disabled"
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "available"
+  | "downloading"
+  | "downloaded"
+  | "applying"
+  | "fallback"
+  | "error";
+
+/** 桌面壳 updater.rs 的 UpdateView（Tauri 命令 update_* 与事件 update-status）。 */
+export type UpdateView = {
+  enabled: boolean;
+  channel: string;
+  currentVersion: string;
+  currentCode: number;
+  phase: UpdatePhase;
+  message: string | null;
+  available: {
+    planId: string;
+    version: string;
+    code: number;
+    mandatory: boolean;
+    releaseNotes: string;
+    releaseNotesUrl: string;
+  } | null;
+  progress: { received: number; total: number; bytesPerSecond: number } | null;
+  manualUrl: string | null;
+  checkedAt: number | null;
+};
+
+export const UPDATE_EVENT = "update-status";
+
 export function getTargets(base: string) {
   return request<{ ok: boolean; targets: Record<string, TargetDef> }>(base, "/api/targets");
 }

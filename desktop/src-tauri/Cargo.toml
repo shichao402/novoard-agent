@@ -20,6 +20,8 @@ serde_json = "1"
 
 [dependencies]
 log = "0.4"
+# 由 scripts/stage-relkit.mjs 从 relkit 服务器取回并验签后物化，不进 git
+relkit-updater = { path = "../../.relkit/sdk-rust" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon", "image-png"] }

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { UpdateSection } from "@/components/update-section";
 import { getCodebuddy, getProfile, getSettings, saveCodebuddy, saveProfile, saveSettings, testHub, type CodebuddySettings } from "@/lib/api";
 import { hubLabel } from "@/lib/utils";
 
@@ -200,6 +201,7 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
           }}
         />
       </section>
+      <UpdateSection />
     </div>
   );
 }

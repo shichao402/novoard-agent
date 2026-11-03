@@ -12,6 +12,7 @@
     "allow-autostart-enabled",
     "allow-set-autostart",
     "allow-open-log-dir",
+    "allow-update",
     "dialog:allow-open"
   ]
 }

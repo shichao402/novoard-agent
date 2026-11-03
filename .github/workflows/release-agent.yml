@@ -1,15 +1,21 @@
 name: release-agent
 
+# 两条发布路径，共用同一套 relkit 产出：
+#   push tag v<semver>     → stable 渠道（Release 档），并附 GitHub Release
+#   workflow_dispatch      → dev 渠道（Dev 档），只发到 relkit
+# 每个平台 job 只做到 ArtifactSet 为止，不持 token；publish job 汇总后 stage + release。
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 env:
   NOVOARD_RELEASE_TAG: ${{ github.ref_name }}
+  RELKIT_CHANNEL: ${{ github.event_name == 'push' && 'stable' || 'dev' }}
 
 jobs:
   test:
@@ -35,13 +41,31 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run release:sync-version
+      - if: env.RELKIT_CHANNEL == 'stable'
+        run: npm run release:sync-version
       - run: npm test
         env:
           NOVOARD_HUB_ROOT: .contract-ssot
 
-  desktop:
+  plan:
     needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      code: ${{ steps.release.outputs.code }}
+      channel: ${{ steps.release.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: release
+        run: node scripts/relkit-version.mjs --channel "$RELKIT_CHANNEL"
+
+  desktop:
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
@@ -50,27 +74,46 @@ jobs:
             platform: win32
             arch: x64
             rust-target: x86_64-pc-windows-msvc
-            bundle: nsis
-            extension: exe
+            relkit-target: windows-amd64
+            exe: .exe
+            installer: "*-setup.exe"
           - os: macos-14
             platform: darwin
             arch: arm64
             rust-target: aarch64-apple-darwin
-            bundle: dmg
-            extension: dmg
+            relkit-target: darwin-arm64
+            exe: ""
+            installer: "*.dmg"
           - os: macos-15-intel
             platform: darwin
             arch: x64
             rust-target: x86_64-apple-darwin
-            bundle: dmg
-            extension: dmg
+            relkit-target: darwin-amd64
+            exe: ""
+            installer: "*.dmg"
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHON: python
+      RELKIT_CLI: ${{ github.workspace }}/.relkit/tools/relkit${{ matrix.exe }}
+      RELKIT_OUT: .relkit/out/${{ matrix.relkit-target }}
     steps:
+      # changelog 取自 git 历史，三个平台必须看到同一份完整历史才能 merge。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust-target }}
@@ -78,40 +121,86 @@ jobs:
         with:
           workspaces: desktop/src-tauri -> target
       - run: npm ci
-      - run: npm run release:sync-version
-      - name: Build SEA binary
-        run: npm run build
-        env:
-          NOVOARD_BUILD_PLATFORM: ${{ matrix.platform }}
-          NOVOARD_BUILD_ARCH: ${{ matrix.arch }}
+      - run: npm ci --prefix desktop
+      - if: env.RELKIT_CHANNEL == 'stable'
+        run: npm run release:sync-version
+      - name: Fetch relkit CLI
+        run: |
+          python scripts/relkit_tool.py --component cli --platform ${{ matrix.relkit-target }} --out-name "relkit${{ matrix.exe }}"
+          chmod +x "$RELKIT_CLI" || true
+      - name: Build Runtime Bootstrap
+        run: '"$RELKIT_CLI" bootstrap build --project relkit.project.json --out .relkit/runtime-bootstrap.json'
+      - name: Fetch relkit updater + Rust SDK
+        run: node scripts/stage-relkit.mjs ${{ matrix.rust-target }}
+      - name: Produce ArtifactSet
+        run: |
+          rm -rf "$RELKIT_OUT"
+          "$RELKIT_CLI" artifacts produce \
+            --version "${{ needs.plan.outputs.version }}" \
+            --channel "${{ needs.plan.outputs.channel }}" \
+            --target ${{ matrix.relkit-target }} \
+            --out-dir "$RELKIT_OUT" \
+            --out "$RELKIT_OUT/artifact-set.json"
       - name: Smoke SEA host protocol
         run: npm run smoke:sidecar
         env:
           NOVOARD_BUILD_PLATFORM: ${{ matrix.platform }}
           NOVOARD_BUILD_ARCH: ${{ matrix.arch }}
-      - name: Stage SEA sidecar
-        run: npm run desktop:stage
-        env:
-          NOVOARD_BUILD_PLATFORM: ${{ matrix.platform }}
-          NOVOARD_BUILD_ARCH: ${{ matrix.arch }}
-          TAURI_TARGET_TRIPLE: ${{ matrix.rust-target }}
       - name: Desktop unit tests
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --target ${{ matrix.rust-target }}
-      - name: Build desktop installer
-        working-directory: desktop
-        run: npx tauri build --ci --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundle }}
-      - name: Upload artifact (workflow debug)
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: novoard-agent-desktop-${{ matrix.platform }}-${{ matrix.arch }}
-          path: desktop/src-tauri/target/**/bundle/${{ matrix.bundle }}/*.${{ matrix.extension }}
-      - name: Attach to Release
+          name: relkit-out-${{ matrix.relkit-target }}
+          path: ${{ env.RELKIT_OUT }}
+          if-no-files-found: error
+      - name: Attach installer to GitHub Release
+        if: env.RELKIT_CHANNEL == 'stable'
         uses: softprops/action-gh-release@v2
         with:
-          files: desktop/src-tauri/target/**/bundle/${{ matrix.bundle }}/*.${{ matrix.extension }}
+          files: ${{ env.RELKIT_OUT }}/${{ matrix.installer }}
+
+  # 唯一持 token 的 job：merge → stage → release 必须在同一工作区完成。
+  publish:
+    needs: [plan, desktop]
+    runs-on: ubuntu-latest
+    env:
+      PYTHON: python
+      RELKIT_CLI: ${{ github.workspace }}/.relkit/tools/relkit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch relkit CLI
+        run: |
+          python scripts/relkit_tool.py --component cli --platform linux-amd64 --out-name relkit
+          chmod +x "$RELKIT_CLI"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: relkit-out-*
+          path: .relkit/in
+      - name: Merge ArtifactSets
+        run: |
+          rm -rf .relkit/merged
+          "$RELKIT_CLI" artifacts merge \
+            --in .relkit/in/relkit-out-windows-amd64/artifact-set.json \
+            --in .relkit/in/relkit-out-darwin-arm64/artifact-set.json \
+            --in .relkit/in/relkit-out-darwin-amd64/artifact-set.json \
+            --out .relkit/merged/artifact-set.json
+      - name: Stage
+        run: '"$RELKIT_CLI" stage --artifact-set .relkit/merged/artifact-set.json'
+      - name: Release plan
+        run: '"$RELKIT_CLI" release --version "${{ needs.plan.outputs.version }}"'
+      - name: Release
+        run: '"$RELKIT_CLI" release --version "${{ needs.plan.outputs.version }}" --execute'
+        env:
+          RELKIT_RELEASE_VIA_CI: "1"
+          RELKIT_CUSTODY_MANIFEST: relkit.custody.json
+          RELKIT_UPLOAD_TOKEN: ${{ secrets.RELKIT_UPLOAD_TOKEN }}
 
   linux-headless:
     needs: test
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

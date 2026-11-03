@@ -100,7 +100,7 @@ Shell -> Shell : 常驻托盘
 
 ## 边界
 
-- 不做自动更新，分发靠重新下载安装。
+- Windows、macOS 桌面壳通过 Relkit 自动更新（tag 发 stable 给 Release 档，手动触发发 dev 给 Dev 档），见 [ADR-0017](../adr/0017-desktop-relkit-updates.md)。本地构建与部署档不启用更新；Linux 无头仍靠重新下载。
 - 不做代码签名之外的额外加固。签名与公证在 CI 里完成。
 - 不支持 Linux arm64。
 - 首版是内测分发：Windows 未签名会有 SmartScreen 提示，macOS ad-hoc 签名首次运行可能需在系统设置里确认。

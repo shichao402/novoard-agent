@@ -1,0 +1,15 @@
+{
+  "schema": "relkit.custody-manifest/1",
+  "scope": "host-ci",
+  "note": "novoard-agent 的宿主 CI 凭据清单。只登记 keyId 与载体名，本身不含任何秘密。清单里恰好一个 token，relkit release 自动选用；GitHub Actions secret RELKIT_UPLOAD_TOKEN 只注入到 publish job。",
+  "keys": [
+    {
+      "keyId": "novoard-agent-ci-token",
+      "kind": "token",
+      "purpose": "novoard-agent 在 publish.firoyang.com 上发布版本的 CI token；只在 release workflow 的 publish job 可见",
+      "carrier": "env",
+      "path": "RELKIT_UPLOAD_TOKEN",
+      "format": "token"
+    }
+  ]
+}

@@ -22,6 +22,7 @@ use tauri_plugin_shell::{
 };
 
 mod edition;
+mod updater;
 
 // Tauri bundler 将 externalBin 放到桌面主程序同目录；运行期只传最终 basename。
 const SIDECAR_NAME: &str = "novoard-agent";
@@ -105,10 +106,15 @@ pub fn run() {
             agent_endpoint,
             autostart_enabled,
             set_autostart,
-            open_log_dir
+            open_log_dir,
+            updater::update_status,
+            updater::update_check,
+            updater::update_download,
+            updater::update_apply
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            app.manage(updater::UpdateState::new(&handle));
             if let Some(window) = handle.get_webview_window("main") {
                 let _ = window.set_title(edition::WINDOW_TITLE);
                 if let Ok(icon) = tauri::image::Image::from_bytes(edition::WINDOW_ICON_PNG) {
@@ -131,6 +137,7 @@ pub fn run() {
                 set_host_status(&handle, &error, true);
                 show_main_window(&handle);
             }
+            updater::start(&handle);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -374,15 +381,20 @@ fn build_tray(
         .checked(autostart_enabled)
         .build(app)?;
     let restart = MenuItemBuilder::with_id("restart", "重启 Agent 服务").build(app)?;
+    let update = MenuItemBuilder::with_id(updater::MENU_ID, "检查更新").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
     let menu = MenuBuilder::new(app)
         .items(&[&open, &chat, &actions, &targets, &logs, &settings])
         .separator()
         .item(&autostart)
         .item(&restart)
+        .item(&update)
         .separator()
         .item(&quit)
         .build()?;
+    if let Some(updates) = app.try_state::<Arc<updater::UpdateState>>() {
+        updates.attach_menu_item(update.clone());
+    }
 
     let autostart_item: CheckMenuItem<_> = autostart.clone();
     let state_for_menu = state.clone();
@@ -401,6 +413,7 @@ fn build_tray(
             "settings" => reveal(app, &state_for_menu, "settings"),
             "autostart" => toggle_autostart(app, &autostart_item),
             "restart" => restart_sidecar(app, &state_for_menu),
+            updater::MENU_ID => updater::on_menu(app, &state_for_menu),
             "quit" => begin_quit(app.clone(), state_for_menu.clone()),
             _ => {}
         })

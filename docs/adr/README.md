@@ -15,6 +15,7 @@
 | [0003](0003-loopback-trust-boundary.md) | 回环即信任边界，写端点靠同源校验 | Accepted | 2026-10-20 |
 | [0004](0004-contract-copy-boundary.md) | 契约 SSOT 在 Hub，本仓只持锁定拷贝 | Accepted | 2026-10-20 |
 | [0016](0016-desktop-shell-over-pwa-tiles.md) | 桌面载体由 PWA 磁贴转向 Tauri 壳 | Accepted | 2026-10-20 |
+| [0017](0017-desktop-relkit-updates.md) | 桌面壳通过 Relkit 自动更新 | Accepted | 2026-11-03 |
 
 ### 执行
 

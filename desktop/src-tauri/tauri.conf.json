@@ -38,7 +38,8 @@
       "../dist/": "console-ui/"
     },
     "externalBin": [
-      "binaries/novoard-agent"
+      "binaries/novoard-agent",
+      "binaries/relkit-updater"
     ],
     "icon": [
       "icons/32x32.png",

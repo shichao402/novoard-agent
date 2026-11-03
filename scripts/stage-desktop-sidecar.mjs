@@ -8,6 +8,7 @@
 import { copyFileSync, existsSync, mkdirSync, chmodSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stageRelkit } from "./stage-relkit.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const platform = process.env.NOVOARD_BUILD_PLATFORM ?? process.platform;
@@ -31,6 +32,9 @@ mkdirSync(dirname(destination), { recursive: true });
 copyFileSync(source, destination);
 if (!isWindows) chmodSync(destination, 0o755);
 console.log(`✓ Tauri sidecar：${destination}`);
+
+// 更新引擎 sidecar 与 Rust SDK：与 agent sidecar 同批 staging，tauri build 才找得到。
+stageRelkit({ triple });
 
 function targetTriple(os, cpu) {
   const triples = {

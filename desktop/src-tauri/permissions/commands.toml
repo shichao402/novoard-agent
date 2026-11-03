@@ -27,3 +27,8 @@ commands.allow = ["set_autostart"]
 identifier = "allow-open-log-dir"
 description = "打开日志目录"
 commands.allow = ["open_log_dir"]
+
+[[permission]]
+identifier = "allow-update"
+description = "查询、检查、下载与安装桌面壳更新（relkit）"
+commands.allow = ["update_status", "update_check", "update_download", "update_apply"]

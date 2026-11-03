@@ -21,5 +21,9 @@ agent.json
 .contract-ssot/
 .DS_Store
 
+# Relkit 构建期产物：取回的工具、物化的 sdk-rust、bootstrap，都不提交
+.relkit/
+.relkit-tools/
+
 # 本机运行态日志
 logs/

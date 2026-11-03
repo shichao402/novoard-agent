@@ -53,7 +53,43 @@ fn main() {
     println!("cargo:rerun-if-changed={}", icon32.display());
     println!("cargo:rerun-if-changed={}", icon128.display());
 
+    relkit_release(&out_dir);
+
     tauri_build::build()
+}
+
+/// 发布构建（CI producer）才会同时给出 bootstrap 与 releaseCode；
+/// 两者齐备时把 bootstrap 嵌入二进制，否则写空文件，运行期据此停用更新。
+fn relkit_release(out_dir: &std::path::Path) {
+    println!("cargo:rerun-if-env-changed=NOVOARD_RELKIT_BOOTSTRAP");
+    println!("cargo:rerun-if-env-changed=NOVOARD_RELEASE_CODE");
+    println!("cargo:rerun-if-env-changed=NOVOARD_RELEASE_VERSION");
+    let bootstrap = std::env::var("NOVOARD_RELKIT_BOOTSTRAP").unwrap_or_default();
+    let code = std::env::var("NOVOARD_RELEASE_CODE").unwrap_or_default();
+    let version = std::env::var("NOVOARD_RELEASE_VERSION").unwrap_or_default();
+    let target = out_dir.join("relkit-bootstrap.json");
+    if bootstrap.is_empty() || code.is_empty() {
+        if !bootstrap.is_empty() || !code.is_empty() {
+            panic!("NOVOARD_RELKIT_BOOTSTRAP 与 NOVOARD_RELEASE_CODE 必须同时设置");
+        }
+        fs::write(&target, "").expect("写入空 bootstrap 失败");
+        return;
+    }
+    let code: i64 = code
+        .parse()
+        .unwrap_or_else(|_| panic!("NOVOARD_RELEASE_CODE 必须是正整数，当前是 {code}"));
+    if code <= 0 {
+        panic!("NOVOARD_RELEASE_CODE 必须是正整数，当前是 {code}");
+    }
+    if version.is_empty() {
+        panic!("发布构建缺少 NOVOARD_RELEASE_VERSION");
+    }
+    println!("cargo:rerun-if-changed={bootstrap}");
+    let text = fs::read_to_string(&bootstrap)
+        .unwrap_or_else(|error| panic!("读取 relkit bootstrap 失败 {bootstrap}：{error}"));
+    fs::write(&target, text).expect("写入 relkit bootstrap 失败");
+    println!("cargo:rustc-env=NOVOARD_RELEASE_CODE={code}");
+    println!("cargo:rustc-env=NOVOARD_RELEASE_VERSION={version}");
 }
 
 fn local_port(edition: &serde_json::Value) -> u16 {
