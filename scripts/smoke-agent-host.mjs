@@ -4,9 +4,9 @@
  * CI 在每个平台 staging/打包前执行，避免“能注入但桌面壳无法托管”的假绿。
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const platform = process.env.NOVOARD_BUILD_PLATFORM ?? process.platform;
 const arch = process.env.NOVOARD_BUILD_ARCH ?? process.arch;
@@ -16,12 +16,30 @@ const binary = resolve(
     ?? join("build", "dist", `${platform}-${arch}`, executable),
 );
 const dataDir = mkdtempSync(join(tmpdir(), "novoard-host-smoke-"));
+const uiDist = resolveSmokeUi();
 
 try {
   const result = await runSmoke(binary, dataDir);
   console.log(`✓ SEA 宿主 smoke：${result.events.join(" → ")}，setup HTTP ${result.httpStatus}`);
 } finally {
   rmSync(dataDir, { recursive: true, force: true });
+}
+
+/**
+ * /setup 由控制台页面提供。桌面壳通过 NOVOARD_UI_DIST 把随附的 console-ui 交给 sidecar，
+ * headless 发行目录在二进制旁带 ui/。smoke 按同样方式提供，缺页面时直接说明，不报含糊的 404。
+ */
+function resolveSmokeUi() {
+  const candidates = [
+    process.env.NOVOARD_UI_DIST,
+    join(dirname(binary), "ui"),
+    resolve("desktop", "dist"),
+  ].filter(Boolean);
+  const found = candidates.find((dir) => existsSync(join(dir, "index.html")));
+  if (!found) {
+    throw new Error(`找不到控制台页面（已查 ${candidates.join("、")}）；先执行 npm --prefix desktop run build 再构建 SEA`);
+  }
+  return resolve(found);
 }
 
 function runSmoke(program, cwd) {
@@ -32,6 +50,7 @@ function runSmoke(program, cwd) {
         NOVOARD_HOST_PROTOCOL: "ndjson",
         NOVOARD_DATA_DIR: cwd,
         NOVOARD_SETUP_PORT: "0",
+        NOVOARD_UI_DIST: uiDist,
       },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,

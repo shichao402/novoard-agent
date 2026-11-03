@@ -210,6 +210,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run release:sync-version
+      # 控制台页面要先构建，SEA 构建会把它放到二进制旁的 ui/，zip 才有 /setup 页面
+      - run: npm ci --prefix desktop && npm --prefix desktop run build
       - run: npm run build
         env:
           NOVOARD_BUILD_PLATFORM: linux

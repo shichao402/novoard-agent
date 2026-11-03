@@ -38,6 +38,8 @@ jobs:
       - run: npm test
         env:
           NOVOARD_HUB_ROOT: .contract-ssot
+      - name: Build console UI
+        run: npm ci --prefix desktop && npm --prefix desktop run build
       - name: Build Linux SEA
         run: npm run build
         env:
