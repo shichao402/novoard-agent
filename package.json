@@ -18,11 +18,12 @@
     "desktop:release-deploy": "node scripts/deploy-windows-release.mjs",
     "desktop:mac-dev-deploy": "node scripts/deploy-macos-dev.mjs",
     "desktop:mac-release-deploy": "node scripts/deploy-macos-release.mjs",
-    "release:sync-version": "node scripts/sync-release-version.mjs",
+    "version:sync": "node scripts/version.mjs sync",
+    "version:check": "node scripts/version.mjs check",
     "contract-gate": "node scripts/check-contract-copy.mjs",
     "contract:gen-types": "node scripts/gen-contract-types.mjs",
     "contract:check-types": "node scripts/gen-contract-types.mjs --check",
-    "test": "npm run contract-gate && npm run contract:check-types && node --test \"test/*.mjs\""
+    "test": "npm run version:check && npm run contract-gate && npm run contract:check-types && node --test \"test/*.mjs\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

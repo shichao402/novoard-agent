@@ -41,12 +41,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - if: env.RELKIT_CHANNEL == 'stable'
-        run: npm run release:sync-version
       - run: npm test
         env:
           NOVOARD_HUB_ROOT: .contract-ssot
 
+  # 唯一领号处：releaseCode 由服务器分配（relkit ADR 0025），一次发布只领一次，矩阵共用。
+  # x.y.z 取自 VERSION.json；stable 时 tag 必须等于 v<VERSION.json>，否则在领号前失败。
   plan:
     needs: test
     runs-on: ubuntu-latest
@@ -54,15 +54,31 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       code: ${{ steps.release.outputs.code }}
       channel: ${{ steps.release.outputs.channel }}
+    env:
+      RELKIT_CLI: ${{ github.workspace }}/.relkit/tools/relkit
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check stable tag against VERSION.json
+        if: env.RELKIT_CHANNEL == 'stable'
+        run: node -e 'import("./scripts/version.mjs").then((m) => m.assertTagMatches(process.env.NOVOARD_RELEASE_TAG, m.readVersion()))'
+      - name: Fetch relkit CLI
+        run: |
+          python scripts/relkit_tool.py --component cli --platform linux-amd64 --out-name relkit
+          chmod +x "$RELKIT_CLI"
       - id: release
-        run: node scripts/relkit-version.mjs --channel "$RELKIT_CHANNEL"
+        name: Claim release code
+        run: |
+          code="$("$RELKIT_CLI" release-code claim)"
+          node scripts/relkit-version.mjs --channel "$RELKIT_CHANNEL" --code "$code"
+        env:
+          RELKIT_CUSTODY_MANIFEST: relkit.custody.json
+          RELKIT_UPLOAD_TOKEN: ${{ secrets.RELKIT_UPLOAD_TOKEN }}
 
   desktop:
     needs: plan
@@ -122,8 +138,6 @@ jobs:
           workspaces: desktop/src-tauri -> target
       - run: npm ci
       - run: npm ci --prefix desktop
-      - if: env.RELKIT_CHANNEL == 'stable'
-        run: npm run release:sync-version
       - name: Fetch relkit CLI
         run: |
           python scripts/relkit_tool.py --component cli --platform ${{ matrix.relkit-target }} --out-name "relkit${{ matrix.exe }}"
@@ -199,7 +213,7 @@ jobs:
           RELKIT_UPLOAD_TOKEN: ${{ secrets.RELKIT_UPLOAD_TOKEN }}
 
   linux-headless:
-    needs: test
+    needs: plan
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -209,7 +223,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run release:sync-version
       # 控制台页面要先构建，SEA 构建会把它放到二进制旁的 ui/，zip 才有 /setup 页面
       - run: npm ci --prefix desktop && npm --prefix desktop run build
       - run: npm run build

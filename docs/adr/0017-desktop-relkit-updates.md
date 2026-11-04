@@ -16,7 +16,7 @@ Relkit 已在其他宿主上落地，提供三样东西：服务器作为唯一�
 
 - 宿主仓只放声明：`relkit.project.json`、`relkit.custody.json`、取工具脚本 `scripts/relkit_tool.py`、artifact producer `scripts/relkit_producer.mjs`。relkit 的版本、摘要、二进制、lock 一律不入库，构建时从服务器 `current` 取回并用根公钥验签（`scripts/stage-relkit.mjs`）。
 - 渠道与档位一一对应：tag `v<semver>` 触发 stable（Release 档），手动触发 workflow 发 dev（Dev 档）。两档 identifier、端口、安装目录不同，可以并排安装，各自只收自己渠道的更新。
-- 版本身份由 `scripts/relkit-version.mjs` 唯一计算：releaseCode 取 `git rev-list --count HEAD`；stable 为 `<semver>+<code>`，dev 为 `<base>-dev.<code>+<code>`。Tauri、Cargo、NSIS 继续只用纯 semver，code 与 bootstrap 由 `build.rs` 在编译期注入。
+- 版本身份由 `scripts/relkit-version.mjs` 唯一计算：x.y.z 只取自根目录 `VERSION.json`（`novoard.version/1`），npm、Tauri、Cargo 清单是派生文件，由 `npm run version:sync` 写入并入库，`npm run version:check`（`npm test` 含）防漂移；stable tag 必须等于 `v<VERSION.json>`，CI 不再按 tag 改写清单。releaseCode 由 relkit 服务器分配（relkit ADR 0025）：release workflow 的 plan job 执行一次 `relkit release-code claim`，矩阵各平台共用该号；不再用 `git rev-list --count HEAD`。stable 为 `<x.y.z>+<code>`，dev 为 `<x.y.z>-dev.<code>+<code>`。Tauri、Cargo、NSIS 继续只用纯 semver，code 与 bootstrap 由 `build.rs` 在编译期注入。
 - 每个平台产出一对制品：installer（首次安装与手动兜底）与 payload（安装后的目录树，`payloadOf` 指向 installer）。Windows 的 install_root 是 exe 所在目录，macOS 是 `.app` 包。
 - 壳内 `src-tauri/src/updater.rs` 是唯一调用引擎的地方：启动 60 秒后首检、此后每 6 小时检查一次；托盘“检查更新”与设置页“软件更新”区块共用同一状态，经 `update-status` 事件推送。安装时引擎要求宿主退出，壳走正常退出流程停掉 sidecar，由 worker 替换并重新拉起。
 - 只有 CI 发布构建内嵌 bootstrap 与 releaseCode。本地构建、`desktop:*-deploy` 部署档不内嵌，更新功能自动停用并在设置页说明原因。

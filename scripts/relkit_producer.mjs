@@ -31,7 +31,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertReleaseMatches, bakeEdition, tauriOverlay } from "./edition.mjs";
 import { nsisSilentCommand } from "./nsis-silent.mjs";
-import { editionForChannel, releaseCodeFromVersion } from "./relkit-version.mjs";
+import { editionForChannel, releaseCodeFromVersion, semverFromVersion } from "./relkit-version.mjs";
+import { readVersion } from "./version.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DESKTOP = join(ROOT, "desktop");
@@ -169,7 +170,10 @@ export async function produce(input) {
 
   const tauriConf = JSON.parse(readFileSync(join(SRC_TAURI, "tauri.conf.json"), "utf8"));
   assertReleaseMatches(tauriConf);
-  const semver = tauriConf.version;
+  const semver = readVersion();
+  if (semverFromVersion(job.version) !== semver || tauriConf.version !== semver) {
+    throw new Error(`版本不一致：relkit ${job.version}、VERSION.json ${semver}、tauri.conf.json ${tauriConf.version}（先 npm run version:sync）`);
+  }
   const names = artifactNames({ semver, code: job.code, target: job.target, edition: job.edition });
   const bundleRoot = join(SRC_TAURI, "target", job.triple, "release", "bundle");
 

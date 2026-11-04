@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { computeRelease, editionForChannel, releaseCodeFromVersion } from "../scripts/relkit-version.mjs";
+import { computeRelease, editionForChannel, releaseCodeFromVersion, semverFromVersion } from "../scripts/relkit-version.mjs";
 import { TARGETS, artifactNames, validateInput } from "../scripts/relkit_producer.mjs";
 import { relkitPlatform } from "../scripts/stage-relkit.mjs";
 
@@ -15,26 +15,35 @@ const input = (overrides = {}) => ({
   ...overrides,
 });
 
-test("stable 版本来自 tag，code 作 build 元数据", () => {
-  const release = computeRelease({ channel: "stable", tag: "v0.4.0", packageVersion: "0.3.3", commitCount: "412" });
+test("stable 的 tag 必须等于 v<VERSION.json>，code 作 build 元数据", () => {
+  const release = computeRelease({ channel: "stable", tag: "v0.4.0", baseVersion: "0.4.0", code: "412" });
   assert.deepEqual(release, { channel: "stable", code: 412, semver: "0.4.0", version: "0.4.0+412", edition: "release" });
-  assert.throws(() => computeRelease({ channel: "stable", tag: "v0.4.0+1", commitCount: 3 }), /build 元数据/);
-  assert.throws(() => computeRelease({ channel: "stable", tag: "main", commitCount: 3 }), /v<semver>/);
+  assert.throws(() => computeRelease({ channel: "stable", tag: "v0.4.1", baseVersion: "0.4.0", code: 3 }), /VERSION\.json/);
+  assert.throws(() => computeRelease({ channel: "stable", tag: "main", baseVersion: "0.4.0", code: 3 }), /v0\.4\.0/);
 });
 
-test("dev 版本取 package.json 基础版本并带 dev.<code>", () => {
-  const release = computeRelease({ channel: "dev", packageVersion: "0.3.3", commitCount: 7 });
+test("dev 版本取 VERSION.json 并带 dev.<code>", () => {
+  const release = computeRelease({ channel: "dev", baseVersion: "0.3.3", code: 7 });
   assert.equal(release.version, "0.3.3-dev.7+7");
   assert.equal(release.semver, "0.3.3");
   assert.equal(release.edition, "dev");
-  assert.throws(() => computeRelease({ channel: "beta", commitCount: 7 }), /stable 或 dev/);
-  assert.throws(() => computeRelease({ channel: "dev", packageVersion: "0.3.3", commitCount: 0 }), /正整数/);
+  assert.throws(() => computeRelease({ channel: "beta", baseVersion: "0.3.3", code: 7 }), /stable 或 dev/);
 });
 
-test("producer 从 version 取回 releaseCode", () => {
+test("releaseCode 只接受服务器分配的正整数", () => {
+  for (const code of [0, -1, "", undefined, "abc", 1.5]) {
+    assert.throws(() => computeRelease({ channel: "dev", baseVersion: "0.3.3", code }), /服务器分配的正整数/);
+  }
+  assert.throws(() => computeRelease({ channel: "dev", baseVersion: "0.3", code: 1 }), /x\.y\.z/);
+});
+
+test("producer 从 version 取回 releaseCode 与 x.y.z", () => {
   assert.equal(releaseCodeFromVersion("0.4.0+412"), 412);
   assert.equal(releaseCodeFromVersion("0.3.3-dev.7+7"), 7);
   assert.throws(() => releaseCodeFromVersion("0.4.0"), /\+<releaseCode>/);
+  assert.equal(semverFromVersion("0.4.0+412"), "0.4.0");
+  assert.equal(semverFromVersion("0.3.3-dev.7+7"), "0.3.3");
+  assert.throws(() => semverFromVersion("0.3.3-rc.1+7"), /x\.y\.z/);
   assert.equal(editionForChannel("stable"), "release");
   assert.equal(editionForChannel("dev"), "dev");
 });
