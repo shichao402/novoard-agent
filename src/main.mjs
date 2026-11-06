@@ -55,7 +55,7 @@ export async function createLiteAgent(options = {}) {
   }
 }
 
-async function buildAgent({ agentDir, log = console, onFatal, config, state }) {
+async function buildAgent({ agentDir, log = console, onFatal, onActivity, config, state }) {
   const dir = agentDir ?? (HERE ? join(HERE, "..", "..", "agents", config.agentId) : null);
   if (!dir) throw new Error("SEA/打包形态必须显式传 agentDir（sea-entry 以 cwd 锚定传入）");
   const auditFile = join(state, "audit.jsonl");
@@ -82,6 +82,7 @@ async function buildAgent({ agentDir, log = console, onFatal, config, state }) {
     bootId,
     shortcutLogDir: join(logDir, "shortcuts"),
     runTraceDir: join(logDir, "runs"),
+    onActivity,
   });
 
   // target 编辑器后端（M6）：保存 → 从盘重装载 → 热替换 runtime/localA2A 注册表 → card.update 上报 hub

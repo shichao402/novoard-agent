@@ -69,7 +69,7 @@ sidecar 主动连 Hub，Hub 不主动连 sidecar。所有远端触达都靠这�
 
 桌面壳与 sidecar 之间的最小进程协议，仅在 `NOVOARD_HOST_PROTOCOL=ndjson` 时启用：
 
-- stdout：一行一个 JSON 事件，`v / type / ts`，类型有 `ui-ready`、`stopping`、`stopped`、`fatal`、`protocol-error`。
+- stdout：一行一个 JSON 事件，`v / type / ts`，类型有 `ui-ready`、`activity`、`stopping`、`stopped`、`fatal`、`protocol-error`。`activity` 带 `running / pendingApproval`，壳据此推迟更新安装（ADR-0018）。
 - stdin：一行一个 JSON 命令。
 - stdin 关闭视为宿主消失，sidecar 主动停机，避免孤儿进程。
 

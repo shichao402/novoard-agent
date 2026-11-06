@@ -13,6 +13,7 @@
     "allow-set-autostart",
     "allow-open-log-dir",
     "allow-update",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "dialog:allow-ask"
   ]
 }

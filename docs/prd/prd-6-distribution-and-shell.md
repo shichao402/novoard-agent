@@ -72,7 +72,7 @@ Shell -> Shell : 常驻托盘
 `host-protocol.mjs` 定义，仅在 `NOVOARD_HOST_PROTOCOL=ndjson` 时启用：
 
 - stdout 一行一个 JSON 事件：`v / type / ts` 加上类型相关字段。
-- 事件类型：`ui-ready`、`stopping`、`stopped`、`fatal`、`protocol-error`。
+- 事件类型：`ui-ready`、`activity`、`stopping`、`stopped`、`fatal`、`protocol-error`。
 - stdin 一行一个 JSON 命令，当前只有 `shutdown`。
 - stdin 关闭视为宿主消失，sidecar 主动停机。
 

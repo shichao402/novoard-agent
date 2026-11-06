@@ -100,6 +100,8 @@ async function bootAgent() {
     agentDir: join(DATA_DIR, "agents", probe.agentId),
     stateDir: join(DATA_DIR, ".agent-state"),
     log: serviceLog,
+    // 在途任务数变化时告诉桌面壳，壳据此决定能否重启安装更新（ADR-0018）
+    onActivity: (activity) => emit("activity", activity),
     onFatal: async (fatal) => {
       emit("fatal", fatal);
       await shutdown("agent-fatal", 1);

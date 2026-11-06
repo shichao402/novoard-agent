@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { UPDATE_EVENT, type UpdateView } from "@/lib/api";
@@ -27,6 +28,7 @@ function phaseText(view: UpdateView) {
       return `正在下载更新${percent}（${formatBytes(progress.received)}${progress.total > 0 ? ` / ${formatBytes(progress.total)}` : ""}）`;
     }
     case "downloaded":
+      if (view.waitingForTasks) return view.message || "还有任务在执行，结束后自动安装。";
       return `新版本 ${view.available?.version ?? ""} 已下载，安装时会退出并自动重启。`;
     case "applying":
       return "正在安装更新，应用即将退出并重启…";
@@ -57,13 +59,20 @@ export function UpdateSection() {
     };
   }, []);
 
-  async function act(command: "update_check" | "update_download" | "update_apply") {
+  async function act(command: "update_check" | "update_download" | "update_apply", args?: { force: boolean }) {
     setError("");
     try {
-      setView(await invoke<UpdateView>(command));
+      setView(await invoke<UpdateView>(command, args));
     } catch (caught) {
       setError(typeof caught === "string" ? caught : caught instanceof Error ? caught.message : "操作失败");
     }
+  }
+
+  /** 等待任务时给一个逃生口：审批可能挂很久。会中断在途任务，所以先确认。 */
+  async function applyNow() {
+    const ok = await ask("立即安装会中断正在执行的任务，等待审批的任务也会丢失。确定继续吗？", { title: "立即安装更新", kind: "warning" });
+    if (!ok) return;
+    void act("update_apply", { force: true });
   }
 
   if (!view) return null;
@@ -85,6 +94,8 @@ export function UpdateSection() {
           <div className="flex shrink-0 gap-2">
             {view.phase === "available" ? (
               <Button variant="accent" disabled={busy} onClick={() => void act("update_download")}>下载更新</Button>
+            ) : view.phase === "downloaded" && view.waitingForTasks ? (
+              <Button variant="secondary" disabled={busy} onClick={() => void applyNow()}>立即安装</Button>
             ) : view.phase === "downloaded" ? (
               <Button variant="accent" disabled={busy} onClick={() => void act("update_apply")}>安装并重启</Button>
             ) : (

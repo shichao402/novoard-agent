@@ -13,7 +13,7 @@ const DEFAULT_TIMEOUT = "10m";
 const DEFAULT_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 32;
 
-export function createAgentRuntime({ targets, log = console, shortcutLogDir, runTraceDir, bootId = "", concurrency = MAX_CONCURRENCY } = {}) {
+export function createAgentRuntime({ targets, log = console, shortcutLogDir, runTraceDir, bootId = "", concurrency = MAX_CONCURRENCY, onActivity } = {}) {
   /** taskId → { state, runner?, waitTimer?, pending? } */
   const running = new Map();
   const executions = new Set();
@@ -21,6 +21,28 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
   let activeCount = 0;
   let stopping = false;
   let currentTargets = targets;
+  let lastActivityKey = "0/0";
+
+  /** 在途统计：working 计 running，审批挂起计 pendingApproval。桌面壳据此决定能否重启安装更新。 */
+  function activity() {
+    let runningCount = 0;
+    let pendingApproval = 0;
+    for (const entry of running.values()) {
+      if (entry.state === "input-required") pendingApproval += 1;
+      else runningCount += 1;
+    }
+    return { running: runningCount, pendingApproval };
+  }
+
+  /** running 表每次变化后调用；只在计数变化时回调，避免刷屏。 */
+  function notifyActivity() {
+    if (typeof onActivity !== "function") return;
+    const current = activity();
+    const key = `${current.running}/${current.pendingApproval}`;
+    if (key === lastActivityKey) return;
+    lastActivityKey = key;
+    try { onActivity(current); } catch { /* 上报失败不影响任务执行 */ }
+  }
 
   /** 热替换 targets（editor 保存路径）：新触发立即用新定义；在途/审批挂起任务沿用旧定义继续跑。 */
   function replaceTargets(next) {
@@ -37,6 +59,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
     if (targetDef.requiresApproval === true) {
       // M4 F3：挂起而非终态——hub 侧 task 停在 input-required，恢复帧到达后 startExecution
       running.set(taskId, { state: "input-required", pending: { skillId, vars, steps, onTerminal, onProgress, onTrace } });
+      notifyActivity();
       onTerminal?.("input-required", `target ${skillId} requiresApproval=true，等待审批（hub 审批门）`);
       return { ok: true, reason: "input-required" };
     }
@@ -94,6 +117,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
       return { ok: false, reason: error?.message ?? String(error) };
     }
     running.set(taskId, { state: "working", runner, skillId });
+    notifyActivity();
     const execution = runner
       .run(vars)
       .then((result) => finish(skillId, taskId, startedAt, runLog, trace, onTrace, result.state ?? (result.ok ? "completed" : "failed"), result.stderr, onTerminal))
@@ -110,6 +134,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
     activeByTarget.set(skillId, Math.max(0, (activeByTarget.get(skillId) ?? 1) - 1));
     activeCount = Math.max(0, activeCount - 1);
     running.delete(taskId);
+    notifyActivity();
     const elapsed = Date.now() - startedAt;
     if (detail && state === "failed" && String(detail).includes("运行超时")) runLog?.error("运行超时");
     runLog?.info(`结束 state=${state} elapsed=${elapsed}ms`);
@@ -160,6 +185,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
     if (!entry || entry.state !== "input-required" || !entry.pending) return { ok: false, reason: "not-suspended" };
     running.delete(taskId);
     startExecution(entry.pending);
+    notifyActivity();
     return { ok: true, reason: "resumed" };
   }
 
@@ -171,9 +197,11 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
     if (entry.state === "working") {
       entry.runner.cancel();
       running.delete(taskId);
+      notifyActivity();
       return { ok: true, reason: "cancel-signal-sent" };
     }
     running.delete(taskId);
+    notifyActivity();
     return { ok: true, reason: "dequeued" };
   }
 
@@ -214,6 +242,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
     cancel,
     shutdown,
     replaceTargets,
+    activity,
     get stopping() {
       return stopping;
     },

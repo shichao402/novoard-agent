@@ -75,6 +75,13 @@ pub struct ProgressView {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WaitingView {
+    running: usize,
+    pending_approval: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateView {
     enabled: bool,
     channel: String,
@@ -86,11 +93,14 @@ pub struct UpdateView {
     progress: Option<ProgressView>,
     manual_url: Option<String>,
     checked_at: Option<u64>,
+    /// 已下载、用户已点安装，但 sidecar 还有在途任务：等它们结束后自动安装（ADR-0018）。
+    waiting_for_tasks: Option<WaitingView>,
 }
 
 pub struct UpdateState {
     updater: Mutex<Option<Updater>>,
     busy: AtomicBool,
+    install_when_idle: AtomicBool,
     view: Mutex<UpdateView>,
     menu_item: Mutex<Option<MenuItem<Wry>>>,
 }
@@ -116,10 +126,12 @@ impl UpdateState {
             progress: None,
             manual_url: None,
             checked_at: None,
+            waiting_for_tasks: None,
         };
         Arc::new(Self {
             updater: Mutex::new(None),
             busy: AtomicBool::new(false),
+            install_when_idle: AtomicBool::new(false),
             view: Mutex::new(view),
             menu_item: Mutex::new(None),
         })
@@ -148,6 +160,9 @@ impl UpdateState {
 
     fn refresh_menu(&self, view: &UpdateView) {
         let text = match (&view.phase, &view.available) {
+            (Phase::Downloaded, Some(next)) if view.waiting_for_tasks.is_some() => {
+                format!("v{} 将在任务结束后安装", next.version)
+            }
             (Phase::Available, Some(next)) => format!("有可用更新 v{}", next.version),
             (Phase::Downloaded, Some(next)) => format!("安装更新 v{}", next.version),
             (Phase::Downloading, _) => "正在下载更新…".to_string(),
@@ -543,7 +558,25 @@ pub async fn download(app: AppHandle) -> UpdateView {
     })
 }
 
-pub async fn apply(app: AppHandle) -> UpdateView {
+/// 在途任务文案：只在有任务时返回。
+fn waiting_text(running: usize, pending_approval: usize) -> Option<String> {
+    let mut parts = Vec::new();
+    if running > 0 {
+        parts.push(format!("{running} 个任务正在执行"));
+    }
+    if pending_approval > 0 {
+        parts.push(format!("{pending_approval} 个任务等待审批"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(format!("{}，全部结束后自动安装。", parts.join("、")))
+    }
+}
+
+/// 安装会退出 sidecar，内存里的任务表随之丢失（ADR-0011）。
+/// 所以默认等到没有执行中、也没有审批挂起的任务再装；`force` 是用户明确选择“立即安装”。
+pub async fn apply(app: AppHandle, force: bool) -> UpdateView {
     let state = state(&app);
     let snapshot = state.snapshot();
     let Some(plan) = snapshot.available.map(|next| next.plan_id) else {
@@ -556,11 +589,26 @@ pub async fn apply(app: AppHandle) -> UpdateView {
             view.message = Some("请先下载更新包".into());
         });
     }
+    let (running, pending_approval) = app.state::<Arc<Supervisor>>().activity();
+    if !force {
+        if let Some(text) = waiting_text(running, pending_approval) {
+            state.install_when_idle.store(true, Ordering::SeqCst);
+            log::info!("更新已就绪，等待在途任务结束：running={running} pendingApproval={pending_approval}");
+            return state.update(&app, |view| {
+                view.message = Some(text);
+                view.waiting_for_tasks = Some(WaitingView { running, pending_approval });
+            });
+        }
+    } else if running + pending_approval > 0 {
+        log::warn!("用户选择立即安装，将中断在途任务：running={running} pendingApproval={pending_approval}");
+    }
+    state.install_when_idle.store(false, Ordering::SeqCst);
     let Some(_guard) = BusyGuard::acquire(&state) else {
         return state.snapshot();
     };
     state.update(&app, |view| {
         view.phase = Phase::Applying;
+        view.waiting_for_tasks = None;
         view.message = Some("正在准备安装…".into());
     });
     let (worker_state, worker_app) = (state.clone(), app.clone());
@@ -611,12 +659,39 @@ pub fn on_menu(app: &AppHandle, supervisor: &Arc<Supervisor>) {
         match phase {
             Phase::Disabled | Phase::Downloading | Phase::Applying => {}
             Phase::Downloaded => {
-                apply(app).await;
+                apply(app, false).await;
             }
             _ => {
                 check(app, true).await;
             }
         }
+    });
+}
+
+/// sidecar 在途任务数变化（lib.rs 收到 activity 事件或 sidecar 退出时调用）。
+/// 用户已点过安装且现在空闲，就接着装；仍忙则刷新等待文案。
+pub fn on_activity(app: &AppHandle) {
+    let Some(state) = app.try_state::<Arc<UpdateState>>().map(|s| s.inner().clone()) else {
+        return;
+    };
+    if !state.install_when_idle.load(Ordering::SeqCst) {
+        return;
+    }
+    let (running, pending_approval) = app.state::<Arc<Supervisor>>().activity();
+    if let Some(text) = waiting_text(running, pending_approval) {
+        state.update(app, |view| {
+            view.message = Some(text);
+            view.waiting_for_tasks = Some(WaitingView { running, pending_approval });
+        });
+        return;
+    }
+    if !state.install_when_idle.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    log::info!("在途任务已清空，开始安装已下载的更新");
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        apply(app, false).await;
     });
 }
 
@@ -690,8 +765,8 @@ pub async fn update_download(app: AppHandle) -> Result<UpdateView, String> {
 }
 
 #[tauri::command]
-pub async fn update_apply(app: AppHandle) -> Result<UpdateView, String> {
-    Ok(apply(app).await)
+pub async fn update_apply(app: AppHandle, force: Option<bool>) -> Result<UpdateView, String> {
+    Ok(apply(app, force.unwrap_or(false)).await)
 }
 
 #[cfg(test)]
@@ -720,6 +795,23 @@ mod tests {
         assert_eq!(layout.install_root, PathBuf::from("/install/Novoard Agent"));
         assert_eq!(layout.executable_relpath, "novoard-agent-desktop.exe");
         assert_eq!(layout.sidecar_relpath, "relkit-updater.exe");
+    }
+
+    #[test]
+    fn waiting_text_only_when_tasks_in_flight() {
+        assert_eq!(waiting_text(0, 0), None);
+        assert_eq!(
+            waiting_text(1, 0).as_deref(),
+            Some("1 个任务正在执行，全部结束后自动安装。")
+        );
+        assert_eq!(
+            waiting_text(2, 1).as_deref(),
+            Some("2 个任务正在执行、1 个任务等待审批，全部结束后自动安装。")
+        );
+        assert_eq!(
+            waiting_text(0, 3).as_deref(),
+            Some("3 个任务等待审批，全部结束后自动安装。")
+        );
     }
 
     #[test]
@@ -768,6 +860,7 @@ mod tests {
             progress: None,
             manual_url: None,
             checked_at: None,
+            waiting_for_tasks: None,
         };
         apply_check_result(
             &mut view,

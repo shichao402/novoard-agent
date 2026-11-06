@@ -38,6 +38,9 @@ struct Supervisor {
     open_on_ready: AtomicBool,
     /// 最近一次 ui-ready 事件。WebView 挂载晚于 sidecar 就绪时，靠它补发，避免永久卡在启动中。
     last_ready: Mutex<Option<HostEvent>>,
+    /// sidecar 最近一次 activity 事件：执行中与审批挂起的任务数。更新安装据此等待空闲（ADR-0018）。
+    tasks_running: AtomicUsize,
+    tasks_pending_approval: AtomicUsize,
 }
 
 impl Supervisor {
@@ -50,7 +53,22 @@ impl Supervisor {
             restart_attempts: AtomicUsize::new(0),
             open_on_ready: AtomicBool::new(open_on_ready),
             last_ready: Mutex::new(None),
+            tasks_running: AtomicUsize::new(0),
+            tasks_pending_approval: AtomicUsize::new(0),
         })
+    }
+
+    /// (执行中, 审批挂起)。sidecar 未启动或已退出时为 (0, 0)：任务表只在内存里，进程没了就没有可保护的任务。
+    fn activity(&self) -> (usize, usize) {
+        (
+            self.tasks_running.load(Ordering::SeqCst),
+            self.tasks_pending_approval.load(Ordering::SeqCst),
+        )
+    }
+
+    fn set_activity(&self, running: usize, pending_approval: usize) {
+        self.tasks_running.store(running, Ordering::SeqCst);
+        self.tasks_pending_approval.store(pending_approval, Ordering::SeqCst);
     }
 }
 
@@ -66,6 +84,10 @@ struct HostEvent {
     message: Option<String>,
     #[serde(default)]
     agent_id: Option<String>,
+    #[serde(default)]
+    running: Option<usize>,
+    #[serde(default)]
+    pending_approval: Option<usize>,
 }
 
 pub fn run() {
@@ -280,6 +302,9 @@ fn spawn_sidecar(app: AppHandle, state: Arc<Supervisor>) -> Result<(), String> {
                     if let Ok(mut child) = state_for_events.child.lock() {
                         child.take();
                     }
+                    // 任务表只在 sidecar 内存里，进程没了就没有在途任务
+                    state_for_events.set_activity(0, 0);
+                    updater::on_activity(&app_for_events);
                     handle_terminated(
                         app_for_events.clone(),
                         state_for_events.clone(),
@@ -331,6 +356,13 @@ fn handle_host_line(app: &AppHandle, state: &Arc<Supervisor>, line: &str) {
         "protocol-error" => {
             let message = event.message.unwrap_or_else(|| "宿主协议错误".into());
             set_host_status(app, &message, true);
+        }
+        "activity" => {
+            state.set_activity(
+                event.running.unwrap_or(0),
+                event.pending_approval.unwrap_or(0),
+            );
+            updater::on_activity(app);
         }
         _ => {}
     }

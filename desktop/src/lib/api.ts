@@ -325,6 +325,8 @@ export type UpdateView = {
   } | null;
   progress: { received: number; total: number; bytesPerSecond: number } | null;
   manualUrl: string | null;
+  /** 用户已点安装、但还有在途任务：结束后自动安装（ADR-0018）。 */
+  waitingForTasks?: { running: number; pendingApproval: number } | null;
   checkedAt: number | null;
 };
 
