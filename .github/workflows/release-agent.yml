@@ -93,7 +93,7 @@ jobs:
             relkit-target: windows-amd64
             exe: .exe
             installer: "*-setup.exe"
-          - os: macos-14
+          - os: macos-15
             platform: darwin
             arch: arm64
             rust-target: aarch64-apple-darwin
