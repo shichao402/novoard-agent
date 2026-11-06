@@ -144,7 +144,7 @@ jobs:
           chmod +x "$RELKIT_CLI" || true
       - name: Build Runtime Bootstrap
         run: '"$RELKIT_CLI" bootstrap build --project relkit.project.json --out .relkit/runtime-bootstrap.json'
-      - name: Fetch relkit updater + Rust SDK
+      - name: Fetch relkit updater + check proto drift
         run: node scripts/stage-relkit.mjs ${{ matrix.rust-target }}
       - name: Produce ArtifactSet
         run: |

@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { computeRelease, editionForChannel, releaseCodeFromVersion, semverFromVersion } from "../scripts/relkit-version.mjs";
-import { TARGETS, artifactNames, validateInput } from "../scripts/relkit_producer.mjs";
-import { relkitPlatform } from "../scripts/stage-relkit.mjs";
+import { TARGETS, artifactNames, assertEngineInTree, validateInput } from "../scripts/relkit_producer.mjs";
+import { PROTO_COPY, checkProtoDrift, relkitPlatform } from "../scripts/stage-relkit.mjs";
 
 const input = (overrides = {}) => ({
   schema: "relkit.artifact-producer-input/2",
@@ -77,4 +79,29 @@ test("producer 的 target 与 relkit 平台、项目配置一致", () => {
   assert.equal(project.product, "novoard-agent");
   assert.deepEqual(project.artifactProducer.command, ["node", "scripts/relkit_producer.mjs"]);
   assert.equal(project.channels, undefined, "渠道由服务器定义，项目不声明（relkit ADR 0024）");
+});
+
+test("payload 必须带本版本的 relkit-updater（ADR 0027）", () => {
+  const app = mkdtempSync(join(tmpdir(), "novoard-app-"));
+  assert.throws(() => assertEngineInTree(app, "Contents/MacOS/relkit-updater"), /relkit-updater/);
+  mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
+  writeFileSync(join(app, "Contents", "MacOS", "relkit-updater"), "");
+  assertEngineInTree(app, "Contents/MacOS/relkit-updater");
+});
+
+test("仓内 updater proto 副本与引擎导出逐字节比对", { skip: process.platform === "win32" }, () => {
+  const copy = readFileSync(PROTO_COPY);
+  assert.match(copy.toString("utf8"), /package relkit\.updater\.v2;/);
+  assert.ok(!copy.includes("\r"), "proto 副本必须是 LF");
+  const dir = mkdtempSync(join(tmpdir(), "novoard-proto-"));
+  const fake = (name, body) => {
+    const exportPath = join(dir, `${name}.proto`);
+    writeFileSync(exportPath, body);
+    const bin = join(dir, name);
+    writeFileSync(bin, `#!/bin/sh\ncat '${exportPath}'\n`);
+    chmodSync(bin, 0o755);
+    return bin;
+  };
+  checkProtoDrift(fake("same", copy));
+  assert.throws(() => checkProtoDrift(fake("drift", Buffer.concat([copy, Buffer.from(" ")]))), /updater proto drift/);
 });

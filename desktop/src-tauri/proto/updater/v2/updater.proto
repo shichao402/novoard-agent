@@ -1,0 +1,437 @@
+syntax = "proto3";
+
+// relkit.updater.v2 is the whole contract between a host and relkit-updater
+// (ADR 0026). It is the only schema a host ever sees: relkit ships no client
+// library, and `relkit-updater proto` prints this file verbatim so a host
+// generates its types from the very binary it is about to run.
+//
+// Transport, one process per request:
+//   stdin : exactly one UpdaterRequest, ProtoJSON, read to EOF
+//   stdout: one UpdaterEvent per line, ProtoJSON (JSON Lines)
+//   stderr: human diagnostics only, never part of the contract
+//   exit  : 0 = a terminal event was written; non-zero = engine fault
+//
+// Both sides parse strictly: an unknown field is an error, never ignored. A
+// field that does not line up is an epoch boundary and must fail loudly.
+//
+// The first event of every run is Capabilities. Hosts check
+// Capabilities.protocol before reading anything else.
+package relkit.updater.v2;
+
+option go_package = "github.com/shichao402/relkit/api/updater/v2;updaterv2";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// Protocol 5 is the binary-only epoch. There is no negotiation and no
+// compatibility window: an engine and a host that disagree answer with
+// UPDATER_TOO_OLD / UPDATER_TOO_NEW and stop.
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_NETWORK = 1;
+  ERROR_CODE_SIGNATURE = 2;
+  ERROR_CODE_ROLLBACK_REJECTED = 3;
+  ERROR_CODE_SELECTOR_NO_MATCH = 4;
+  ERROR_CODE_DISK = 5;
+  ERROR_CODE_PERMISSION_DENIED = 6;
+  ERROR_CODE_OCCUPIED = 7;
+  // The request is not a valid UpdaterRequest, or carries no protocol.
+  ERROR_CODE_PROTOCOL_MISMATCH = 8;
+  // The host speaks a newer protocol than this engine.
+  ERROR_CODE_UPDATER_TOO_OLD = 9;
+  // The host speaks an older protocol than this engine.
+  ERROR_CODE_UPDATER_TOO_NEW = 10;
+  ERROR_CODE_PLAN_TAMPERED = 11;
+  ERROR_CODE_PLAN_EXPIRED = 12;
+  ERROR_CODE_PLAN_UNKNOWN = 13;
+  ERROR_CODE_PLAN_NOT_DOWNLOADED = 14;
+  ERROR_CODE_SKIP_DENIED = 15;
+  ERROR_CODE_PROFILE_INVALID = 16;
+  ERROR_CODE_CHANNEL_NOT_ALLOWED = 17;
+  ERROR_CODE_CANCELED = 18;
+  ERROR_CODE_SIDECAR_NOT_FOUND = 19;
+  ERROR_CODE_LAYOUT_UNSUPPORTED = 20;
+  // The full-install handoff ran the verified installer and it exited with a
+  // non-zero code that does not mean "user cancelled".
+  ERROR_CODE_INSTALLER_FAILED = 21;
+}
+
+enum LastResult {
+  LAST_RESULT_UNSPECIFIED = 0;
+  LAST_RESULT_UP_TO_DATE = 1;
+  LAST_RESULT_UPDATE_AVAILABLE = 2;
+  LAST_RESULT_FALLBACK_REQUIRED = 3;
+  LAST_RESULT_THROTTLED = 4;
+  LAST_RESULT_FAILED = 5;
+  LAST_RESULT_APPLIED = 6;
+}
+
+enum Placement {
+  PLACEMENT_UNSPECIFIED = 0;
+  PLACEMENT_IN_PLACE = 1;
+  PLACEMENT_LIBRARY = 2;
+}
+
+enum ApplyDisposition {
+  APPLY_DISPOSITION_UNSPECIFIED = 0;
+  APPLY_DISPOSITION_INTERNAL = 1;
+  APPLY_DISPOSITION_FULL_INSTALL = 2;
+}
+
+enum Operation {
+  OPERATION_UNSPECIFIED = 0;
+  OPERATION_CHECK = 1;
+  OPERATION_SKIP = 2;
+  OPERATION_DOWNLOAD = 3;
+  OPERATION_APPLY = 4;
+  OPERATION_STATUS = 5;
+  OPERATION_CLEANUP = 6;
+  // 7 was CANCEL: it never cancelled anything. Interrupt the process instead.
+  // 8 was SCHEDULER: "when to check" belongs to the host.
+  reserved 7, 8;
+  OPERATION_LIST_INSTALLED = 9;
+  OPERATION_SWITCH_ACTIVE = 10;
+  OPERATION_ROLLBACK = 11;
+  OPERATION_DELETE_INSTALLED = 12;
+}
+
+enum SessionPhase {
+  SESSION_PHASE_UNSPECIFIED = 0;
+  SESSION_PHASE_WAITING_FOR_EXIT = 1;
+  SESSION_PHASE_COPYING = 2;
+  SESSION_PHASE_COMMITTING = 3;
+  SESSION_PHASE_RELAUNCHING = 4;
+  SESSION_PHASE_NEEDS_ATTENTION = 5;
+  SESSION_PHASE_COMPLETED = 6;
+  SESSION_PHASE_ROLLED_BACK = 7;
+  // The worker is fetching a plan that apply accepted before download.
+  SESSION_PHASE_DOWNLOADING = 8;
+}
+
+message RecoveryLink {
+  string label = 1;
+  string url = 2;
+}
+
+// RecoveryHelp is compiled into the host (ADR 0007) and echoed back on
+// failures that leave the user stranded.
+message RecoveryHelp {
+  string message = 1;
+  repeated RecoveryLink links = 2;
+}
+
+// ClientProfile tells the engine which product it is updating. The engine is
+// the only parser of the Runtime Bootstrap: product, channels, entry URLs and
+// the trusted root all come from it. A host never restates any of them.
+message ClientProfile {
+  // Verbatim relkit.runtime-bootstrap/2 JSON embedded in the host at build
+  // time. Required.
+  string bootstrap = 1;
+  // Product the host believes it is. Required; must equal the bootstrap
+  // product, so a host that embedded the wrong bootstrap fails at once.
+  string expected_product = 2;
+  RecoveryHelp recovery = 3;
+}
+
+// HandshakeReport is what the engine learned while validating the bootstrap.
+// It rides on Capabilities so the host never needs its own parser.
+message HandshakeReport {
+  string product = 1;
+  repeated string allowed_channels = 2;
+  string default_channel = 3;
+  string root_key_id = 4;
+  string root_fingerprint = 5;
+}
+
+message LibraryPolicy {
+  int32 retain = 1; // 0 means current + previous
+  repeated int64 reserved_codes = 2;
+}
+
+message InstallSpec {
+  Placement placement = 1;
+  string install_root = 2;
+  string executable_relpath = 3;
+  string sidecar_relpath = 4;
+  repeated string preserve = 5;
+  bool relaunch = 6;
+  LibraryPolicy library = 7;
+  // Product name shown in the engine progress window. Falls back to the
+  // bootstrap product id when empty.
+  string display_name = 8;
+}
+
+message Runtime {
+  string channel = 1;
+  int64 current_code = 2;
+  // Free-form client selectors (SPEC.md §11). The engine injects os/arch in
+  // the reserved GOOS/GOARCH vocabulary (darwin/linux/windows, amd64/arm64)
+  // when a host leaves them unset; host-declared values always win verbatim.
+  map<string, string> client_selectors = 3;
+  string data_dir = 4;
+  InstallSpec install = 5;
+}
+
+message CheckPolicy {
+  google.protobuf.Duration after_success = 1;
+  google.protobuf.Duration after_failure = 2;
+}
+
+message Capabilities {
+  uint32 protocol = 1;
+  repeated Operation operations = 2;
+  repeated Placement placements = 3;
+  google.protobuf.Duration min_check_interval = 4;
+  google.protobuf.Duration plan_ttl = 5;
+  string engine_version = 6;
+  // Present once the engine has validated a bootstrap; absent in the
+  // capabilities-only probe and on early failures.
+  HandshakeReport handshake = 7;
+}
+
+message CheckOp {
+  bool force = 1;
+  int64 exact_code = 2;
+  CheckPolicy policy = 3;
+}
+
+message SkipOp {
+  int64 code = 1;
+}
+
+message DownloadOp {
+  string plan_id = 1;
+}
+
+message ApplyOp {
+  string plan_id = 1;
+  // When true, LIBRARY installs into versions/ but does not rewrite
+  // active.json. IN_PLACE ignores this flag.
+  bool install_only = 2;
+  // The worker shows a small progress window while the host is gone
+  // (waiting for exit, downloading, installing, relaunching, failure).
+  // Default is shown; a host that draws its own handoff UI sets this.
+  bool hide_progress = 3;
+}
+
+message StatusOp {}
+
+message CleanupOp {}
+
+message ListInstalledOp {}
+
+message SwitchActiveOp {
+  int64 code = 1;
+}
+
+message RollbackOp {}
+
+// DeleteInstalledOp removes one installed version from a LIBRARY install root.
+// The engine refuses to delete the version active.json points at and any
+// version the host declares in use, renames the directory out of versions/
+// before removing it, and holds .relkit-apply.lock so it can never race an
+// apply.
+message DeleteInstalledOp {
+  int64 code = 1;
+  // Codes the host is currently running from, e.g. every open editor window.
+  repeated int64 in_use_codes = 2;
+}
+
+message InstalledVersion {
+  int64 code = 1;
+  string version = 2;
+  string path = 3;
+  string executable = 4;
+  bool active = 5;
+}
+
+message InstalledList {
+  repeated InstalledVersion versions = 1;
+  int64 active_code = 2;
+}
+
+message UpdaterRequest {
+  // Required. Must equal the engine's protocol (5).
+  uint32 protocol = 1;
+  ClientProfile profile = 2;
+  Runtime runtime = 3;
+  oneof op {
+    CheckOp check = 10;
+    SkipOp skip = 11;
+    DownloadOp download = 12;
+    ApplyOp apply = 13;
+    StatusOp status = 14;
+    CleanupOp cleanup = 15;
+    ListInstalledOp list_installed = 16;
+    SwitchActiveOp switch_active = 17;
+    RollbackOp rollback = 18;
+    DeleteInstalledOp delete_installed = 19;
+  }
+}
+
+message Error {
+  ErrorCode code = 1;
+  bool retryable = 2;
+  string message = 3;
+  repeated string attempts = 4;
+  RecoveryHelp recovery = 5;
+}
+
+message PriorReleaseNotes {
+  string version = 1;
+  int64 code = 2;
+  string notes = 3;
+  string notes_url = 4;
+}
+
+message ArtifactView {
+  string name = 1;
+  int64 size = 2;
+  bytes sha256 = 3;
+}
+
+message UpToDate {
+  int64 sequence = 1;
+  bool current_is_yanked = 2;
+}
+
+message UpdateAvailable {
+  string plan_id = 1;
+  string prompt_key = 2;
+  string version = 3;
+  int64 code = 4;
+  bool mandatory = 5;
+  int32 remaining_hops = 6;
+  int64 sequence = 7;
+  string release_notes_markdown = 8;
+  string release_notes_url = 9;
+  repeated PriorReleaseNotes prior_release_notes = 10;
+  repeated ArtifactView artifacts = 11;
+  ApplyDisposition apply_disposition = 12;
+}
+
+message FallbackRequired {
+  string prompt_key = 1;
+  string manual_url = 2;
+  string message = 3;
+  bool mandatory = 4;
+  int64 sequence = 5;
+  int64 min_code = 6;
+  int64 max_code = 7;
+}
+
+message Throttled {
+  google.protobuf.Timestamp next_allowed_at = 1;
+}
+
+message Failed {
+  Error error = 1;
+}
+
+message CheckResult {
+  oneof kind {
+    UpToDate up_to_date = 1;
+    UpdateAvailable update_available = 2;
+    FallbackRequired fallback_required = 3;
+    Throttled throttled = 4;
+    Failed failed = 5;
+  }
+}
+
+message Downloaded {
+  string plan_id = 1;
+  int64 bytes = 2;
+}
+
+message DownloadResult {
+  oneof kind {
+    Downloaded downloaded = 1;
+    Failed failed = 2;
+  }
+}
+
+message ApplyAccepted {
+  string session_id = 1;
+  string plan_id = 2;
+  // The host must exit now; the apply worker waits for it.
+  bool requires_host_exit = 3;
+}
+
+message ApplyResult {
+  oneof kind {
+    ApplyAccepted accepted = 1;
+    Failed failed = 2;
+  }
+}
+
+message Ok {}
+
+message Result {
+  oneof kind {
+    Ok ok = 1;
+    Failed failed = 2;
+  }
+}
+
+message SidecarInfo {
+  string path = 1;
+  uint32 protocol = 2;
+  string version = 3;
+}
+
+message SessionView {
+  string session_id = 1;
+  string plan_id = 2;
+  SessionPhase phase = 3;
+  google.protobuf.Timestamp started_at = 4;
+  Error error = 5;
+}
+
+message StatusSnapshot {
+  google.protobuf.Timestamp last_check_at = 1;
+  LastResult last_result = 2;
+  google.protobuf.Timestamp next_allowed_at = 3;
+  int64 last_seen_sequence = 4;
+  repeated int64 skipped_codes = 5;
+  SessionView active_session = 6;
+  SidecarInfo sidecar = 7;
+  // The one handoff rule a host follows (ADR 0026): send status at startup
+  // and exit at once when this is true. The engine sets it while a live apply
+  // worker still needs the install root (waiting for exit, downloading,
+  // copying, committing). It stays false once the files are in place
+  // (RELAUNCHING onward), for sessions that never asked the host to exit, and
+  // for a worker that died, so a crashed update can never lock a host out.
+  bool host_must_exit = 8;
+}
+
+message Progress {
+  int64 bytes_received = 1;
+  int64 bytes_total = 2;
+  int64 bytes_per_second = 3;
+}
+
+message ApplyProgress {
+  string session_id = 1;
+  SessionPhase phase = 2;
+}
+
+message Log {
+  string message = 1;
+}
+
+message UpdaterEvent {
+  oneof kind {
+    Capabilities capabilities = 1;
+    Progress progress = 2;
+    ApplyProgress apply_progress = 3;
+    Log log = 4;
+    CheckResult check = 10;
+    DownloadResult download = 11;
+    ApplyResult apply = 12;
+    Result result = 13;
+    StatusSnapshot status = 14;
+    Failed failed = 15;
+    InstalledList installed = 16;
+  }
+}

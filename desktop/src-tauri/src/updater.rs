@@ -15,12 +15,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use relkit_updater::{
+use crate::relkit_sidecar::{
     proto::{
         self, apply_result, check_result, download_result, updater_event, ErrorCode, Placement,
         SessionPhase,
     },
-    OpenResult, Updater,
+    Updater,
 };
 use serde::Serialize;
 use tauri::{menu::MenuItem, AppHandle, Emitter, Manager, Wry};
@@ -192,7 +192,43 @@ fn disabled_reason() -> Option<String> {
         Ok(exe) => exe,
         Err(error) => return Some(format!("无法定位当前程序：{error}")),
     };
-    install_layout(&exe, cfg!(target_os = "macos")).err()
+    let layout = match install_layout(&exe, cfg!(target_os = "macos")) {
+        Ok(layout) => layout,
+        Err(reason) => return Some(reason),
+    };
+    if cfg!(target_os = "macos") {
+        return macos_location_problem(&layout.install_root);
+    }
+    None
+}
+
+/// relkit ADR 0027：.app 处于 App Translocation、在 DMG 里直接运行或所在目录
+/// 不可写时，原地替换必然失败，不发起更新，提示用户先拖进“应用程序”。
+fn macos_location_problem(bundle: &Path) -> Option<String> {
+    let text = bundle.to_string_lossy();
+    const HINT: &str = "请先把应用拖进“应用程序”文件夹再打开，之后才能自动更新。";
+    if text.contains("/AppTranslocation/") {
+        return Some(format!("应用正在 macOS 隔离位置运行（App Translocation），已停用自动更新。{HINT}"));
+    }
+    if text.starts_with("/Volumes/") {
+        return Some(format!("应用正在安装盘映像（DMG）中运行，已停用自动更新。{HINT}"));
+    }
+    let parent = bundle.parent()?;
+    if !dir_writable(parent) {
+        return Some(format!("安装位置 {} 不可写，已停用自动更新。{HINT}", parent.display()));
+    }
+    None
+}
+
+fn dir_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".novoard-write-probe-{}", std::process::id()));
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// 当前平台在 artifact 上声明的 `os-arch` 选择器，与 producer 的 target 同名。
@@ -262,6 +298,7 @@ fn open_updater(app: &AppHandle) -> Result<Updater, String> {
         expected_product: PRODUCT.to_string(),
         ..Default::default()
     };
+    let sidecar = layout.install_root.join(&layout.sidecar_relpath);
     let runtime = proto::Runtime {
         channel: channel().to_string(),
         current_code: release_code().unwrap_or(0),
@@ -273,13 +310,25 @@ fn open_updater(app: &AppHandle) -> Result<Updater, String> {
             executable_relpath: layout.executable_relpath,
             sidecar_relpath: layout.sidecar_relpath,
             relaunch: true,
+            display_name: edition::PRODUCT_NAME.to_string(),
             ..Default::default()
         }),
-        sidecar_path: String::new(),
     };
-    match Updater::open(profile, runtime) {
-        OpenResult::Opened { updater, .. } => Ok(*updater),
-        OpenResult::Failed(error) => Err(describe_error(Some(&error))),
+    Updater::open_at(sidecar, profile, runtime).map_err(|error| describe_error(Some(&error)))
+}
+
+/// 启动交接（relkit ADR 0026）：引擎的 apply worker 仍要占用安装目录时，
+/// 新启动的宿主必须立刻退出。问不到引擎（未接入、缺组件、引擎异常）一律放行。
+pub fn host_must_exit(app: &AppHandle) -> bool {
+    let Ok(updater) = open_updater(app) else {
+        return false;
+    };
+    match updater.status() {
+        Ok(status) => status.host_must_exit,
+        Err(error) => {
+            log::warn!("启动时查询更新状态失败，放行：{}", describe_error(Some(&error)));
+            false
+        }
     }
 }
 
@@ -300,6 +349,11 @@ fn describe_error(error: Option<&proto::Error>) -> String {
         }
         ErrorCode::PlanNotDownloaded => "更新包尚未下载",
         ErrorCode::SidecarNotFound => "安装包中缺少更新组件 relkit-updater",
+        ErrorCode::UpdaterTooOld | ErrorCode::UpdaterTooNew | ErrorCode::ProtocolMismatch => {
+            "内置更新组件与本程序版本不一致，请下载完整安装包重新安装"
+        }
+        ErrorCode::LayoutUnsupported => "当前安装形态不支持自动更新",
+        ErrorCode::InstallerFailed => "安装程序执行失败",
         ErrorCode::ChannelNotAllowed => "服务器未开放当前更新渠道",
         ErrorCode::ProfileInvalid => "内置的更新配置无效",
         ErrorCode::Canceled => "已取消",
@@ -593,7 +647,7 @@ async fn report_last_session(app: &AppHandle) {
     let (worker_state, worker_app) = (state.clone(), app.clone());
     let Ok(status) = blocking(move || {
         let updater = worker_state.updater(&worker_app)?;
-        Ok(updater.status())
+        updater.status().map_err(|error| describe_error(Some(&error)))
     })
     .await
     else {
@@ -666,6 +720,25 @@ mod tests {
         assert_eq!(layout.install_root, PathBuf::from("/install/Novoard Agent"));
         assert_eq!(layout.executable_relpath, "novoard-agent-desktop.exe");
         assert_eq!(layout.sidecar_relpath, "relkit-updater.exe");
+    }
+
+    #[test]
+    fn macos_location_rejects_translocation_and_dmg() {
+        let translocated = Path::new(
+            "/private/var/folders/x/T/AppTranslocation/ABC/d/Novoard Agent.app",
+        );
+        assert!(macos_location_problem(translocated).unwrap().contains("App Translocation"));
+        let mounted = Path::new("/Volumes/Novoard Agent/Novoard Agent.app");
+        assert!(macos_location_problem(mounted).unwrap().contains("DMG"));
+    }
+
+    #[test]
+    fn macos_location_requires_writable_parent() {
+        let dir = std::env::temp_dir().join(format!("novoard-loc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(macos_location_problem(&dir.join("Novoard Agent.app")).is_none());
+        assert!(macos_location_problem(Path::new("/nonexistent-root/Novoard Agent.app")).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

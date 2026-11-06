@@ -8,7 +8,8 @@
  *   installer：Windows NSIS setup.exe / macOS dmg（首次安装与手动兜底）
  *   payload  ：安装后目录树的 relkit payload（IN_PLACE 自动更新用，payloadOf → installer）
  *     Windows：NSIS 静默装到临时目录，去掉 uninstall.exe 后打包（只允许在 CI 跑，会写 HKCU）
- *     macOS  ：直接把 .app 打包，相对路径即 Contents/...
+ *     macOS  ：整个 .app 作 BUNDLE 单元（relkit payload build --bundle，relkit.payload/2）
+ *   两种 payload 都必须带本版本的 relkit-updater（ADR 0027：引擎跟版本走）。
  *
  * 渠道决定档位：stable → release 档，dev → dev 档（不同 identifier / 端口 / 安装目录）。
  * releaseCode 取 version 末尾的 +N，与 bootstrap 一起经环境变量编进桌面壳（build.rs）。
@@ -127,6 +128,18 @@ function buildPayload(cli, tree, out) {
   run(cli, ["payload", "build", "--tree", tree, "--out", out]);
 }
 
+/** macOS：整个 .app 作为 BUNDLE 单元（relkit.payload/2，保留 framework 软链，ADR 0027）。 */
+function buildBundlePayload(cli, app, out) {
+  run(cli, ["payload", "build", "--bundle", app, "--out", out]);
+}
+
+/** ADR 0027：引擎跟版本走，payload 里必须带本版本的 relkit-updater。 */
+export function assertEngineInTree(tree, relpath) {
+  if (!existsSync(join(tree, relpath))) {
+    throw new Error(`payload 缺少本版本引擎 ${relpath}（检查 tauri externalBin 与 stage-relkit）`);
+  }
+}
+
 function installNsisForPayload(installer) {
   if (!process.env.CI) {
     throw new Error("Windows payload 需要静默安装 NSIS（会改写 HKCU 安装记录），只允许在 CI 中运行");
@@ -200,6 +213,7 @@ export async function produce(input) {
       writeFileSync(installerPath, readFileSync(setup));
       const tree = installNsisForPayload(setup);
       try {
+        assertEngineInTree(tree, "relkit-updater.exe");
         buildPayload(cli, tree, payloadPath);
       } finally {
         rmSync(tree, { recursive: true, force: true });
@@ -207,8 +221,10 @@ export async function produce(input) {
     } else {
       const dmg = single(join(bundleRoot, "dmg"), (name) => name.endsWith(".dmg"), " dmg");
       const app = single(join(bundleRoot, "macos"), (name) => name.endsWith(".app"), " .app");
+      assertEngineInTree(app, "Contents/MacOS/relkit-updater");
+      run("codesign", ["--verify", "--deep", "--strict", app]);
       writeFileSync(installerPath, readFileSync(dmg));
-      buildPayload(cli, app, payloadPath);
+      buildBundlePayload(cli, app, payloadPath);
     }
   } finally {
     bakeEdition({ NOVOARD_EDITION: "release" });

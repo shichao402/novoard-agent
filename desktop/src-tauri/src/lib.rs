@@ -22,6 +22,7 @@ use tauri_plugin_shell::{
 };
 
 mod edition;
+mod relkit_sidecar;
 mod updater;
 
 // Tauri bundler 将 externalBin 放到桌面主程序同目录；运行期只传最终 basename。
@@ -114,6 +115,10 @@ pub fn run() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            if updater::host_must_exit(&handle) {
+                log::warn!("relkit 更新正在替换安装目录，本次启动让位退出");
+                std::process::exit(0);
+            }
             app.manage(updater::UpdateState::new(&handle));
             if let Some(window) = handle.get_webview_window("main") {
                 let _ = window.set_title(edition::WINDOW_TITLE);

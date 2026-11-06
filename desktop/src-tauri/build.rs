@@ -54,8 +54,36 @@ fn main() {
     println!("cargo:rerun-if-changed={}", icon128.display());
 
     relkit_release(&out_dir);
+    generate_updater_types(&manifest_dir, &out_dir);
 
     tauri_build::build()
+}
+
+/// relkit ADR 0026：从仓内 proto 副本生成 `relkit.updater.v2` 的 prost 类型和
+/// 严格 ProtoJSON（pbjson，不开 ignore_unknown_fields，未知字段即报错）。
+fn generate_updater_types(manifest_dir: &std::path::Path, out_dir: &std::path::Path) {
+    let proto_root = manifest_dir.join("proto");
+    let proto = proto_root.join("updater/v2/updater.proto");
+    println!("cargo:rerun-if-changed={}", proto.display());
+    std::env::set_var(
+        "PROTOC",
+        protoc_bin_vendored::protoc_bin_path().expect("vendored protoc 不可用"),
+    );
+    let well_known = protoc_bin_vendored::include_path().expect("vendored protoc include 不可用");
+    let descriptor = out_dir.join("updater_descriptor.bin");
+    prost_build::Config::new()
+        .file_descriptor_set_path(&descriptor)
+        .compile_well_known_types()
+        .extern_path(".google.protobuf", "::pbjson_types")
+        .compile_protos(&[&proto], &[&proto_root, &well_known])
+        .expect("生成 relkit updater 类型失败");
+    let descriptors = fs::read(&descriptor).expect("读取 updater descriptor 失败");
+    pbjson_build::Builder::new()
+        .register_descriptors(&descriptors)
+        .expect("注册 updater descriptor 失败")
+        .emit_fields()
+        .build(&[".relkit.updater.v2"])
+        .expect("生成 relkit updater ProtoJSON 失败");
 }
 
 /// 发布构建（CI producer）才会同时给出 bootstrap 与 releaseCode；
