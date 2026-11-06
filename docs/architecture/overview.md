@@ -75,6 +75,8 @@ sidecar 主动连 Hub，Hub 不主动连 sidecar。所有远端触达都靠这�
 
 宿主模式下普通日志只写文件，不碰 stdout，也不镜像 stderr。
 
+壳还会注入 `NOVOARD_APP_VERSION`（relkit 发布版本，本地构建回落包版本）和 `NOVOARD_APP_CHANNEL`（`stable` / `dev`，未接入更新的构建为 `local`）。sidecar 把它们连同平台放进 `agent.hello.app`（契约 v2.3）上报 Hub；源码直接运行时版本取 `VERSION.json`，渠道为 `local`。
+
 ## 数据目录
 
 锚定 `NOVOARD_DATA_DIR`，未设置时用 `process.cwd()`（`sea-entry.mjs` 会 `chdir` 过去）。

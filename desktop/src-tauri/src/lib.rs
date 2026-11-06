@@ -255,6 +255,7 @@ fn spawn_sidecar(app: AppHandle, state: Arc<Supervisor>) -> Result<(), String> {
 
     let data_dir = desktop_data_dir(&app)?;
     fs::create_dir_all(&data_dir).map_err(|error| format!("无法创建应用数据目录：{error}"))?;
+    let (app_version, app_channel) = updater::app_identity(&app);
 
     let command = app
         .shell()
@@ -262,6 +263,8 @@ fn spawn_sidecar(app: AppHandle, state: Arc<Supervisor>) -> Result<(), String> {
         .map_err(|error| format!("无法定位 Agent sidecar：{error}"))?
         .current_dir(&data_dir)
         .env("NOVOARD_HOST_PROTOCOL", "ndjson")
+        .env("NOVOARD_APP_VERSION", app_version)
+        .env("NOVOARD_APP_CHANNEL", app_channel)
         .env("NOVOARD_DATA_DIR", &data_dir)
         .env("NOVOARD_UI_HOST", "127.0.0.1")
         .env("NOVOARD_UI_TOKEN", "")

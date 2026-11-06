@@ -11,6 +11,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { reportAbandonedRuns } from "./run-trace.mjs";
+import { appInfo } from "./app-info.mjs";
 
 const PING_INTERVAL_MS = 25_000;
 const RETRY_BASE_MS = 1_000;
@@ -40,7 +41,7 @@ function callerParts(parts, text) {
   return outgoing;
 }
 
-export function createTunnelClient({ config, card, targets, runner, stateDir, runTraceDir, bootId = "", log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice } = {}) {
+export function createTunnelClient({ config, card, targets, runner, stateDir, runTraceDir, bootId = "", app, log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice } = {}) {
   if (!config?.ok) throw new Error(`lite-agent 配置无效：${config?.reason}`);
   const { agentId, hubUrl, agentToken, contractVersion } = config;
   const hubHttpUrl = new URL(hubUrl);
@@ -227,6 +228,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
           card: getCard(),
           inFlightTaskIds,
           ...(bootId ? { bootId } : {}),
+          app: app ?? appInfo(),
         });
         log.info?.(`发出 hello（msgId=${helloMsgId}，本端 contractVersion=${contractVersion}，hub=${hubHttp}）`);
         armHelloDeadline();

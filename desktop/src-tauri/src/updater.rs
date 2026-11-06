@@ -195,6 +195,16 @@ fn channel() -> &'static str {
     }
 }
 
+/// 上报给 Hub 的应用身份（契约 v2.3 agent.hello.app）：版本与渠道。
+/// 未接入更新的本地构建渠道记为 local，与 relkit 渠道区分。
+pub fn app_identity(app: &AppHandle) -> (String, &'static str) {
+    let version = RELEASE_VERSION
+        .map(str::to_string)
+        .unwrap_or_else(|| app.package_info().version.to_string());
+    let channel = if release_code().is_some() { channel() } else { "local" };
+    (version, channel)
+}
+
 fn release_code() -> Option<i64> {
     RELEASE_CODE.and_then(|code| code.parse::<i64>().ok()).filter(|code| *code > 0)
 }

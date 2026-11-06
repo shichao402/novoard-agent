@@ -18,6 +18,17 @@
       "type": "array",
       "description": "重连时上报在途任务，供 hub 对账（契约 §4.4）",
       "items": { "type": "string", "pattern": "^task-" }
+    },
+    "app": {
+      "type": "object",
+      "description": "agent 程序自身的版本信息（契约 v2.3），hub 只记录和展示，不做准入判断。版本事实源是 relkit 服务器",
+      "required": ["version"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1, "description": "程序版本，如 0.3.4" },
+        "channel": { "type": "string", "description": "更新渠道：stable / dev；未接入更新的构建为 local" },
+        "platform": { "type": "string", "description": "运行平台，如 win32-x64、darwin-arm64" }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

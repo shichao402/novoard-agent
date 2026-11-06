@@ -42,7 +42,8 @@ test("帧类 schema 主类型严格，另提供 Inbound 视角承载未知字段
   const hello = text.match(/export type FrameAgentHello = \{[\s\S]*?\n\};/);
   assert.ok(hello, "应生成 FrameAgentHello");
   // 主类型严格：构造帧时拼错字段必须报错，不能被索引签名吞掉（需求 2.5）
-  assert.doesNotMatch(hello[0], /\[key: string\]: unknown;/, "主类型不应带索引签名，否则拼写错误无法被发现");
+  // 只看顶层（两格缩进）：嵌套的开放对象（如 v2.3 的 app）自带索引签名是允许的
+  assert.doesNotMatch(hello[0], /^  \[key: string\]: unknown;/m, "主类型不应带索引签名，否则拼写错误无法被发现");
   // 入站视角放宽：接收对端帧时允许未知字段（需求 2.9）
   assert.match(text, /export type FrameAgentHelloInbound = FrameAgentHello & \{ readonly \[key: string\]: unknown \};/);
 });

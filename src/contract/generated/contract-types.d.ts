@@ -113,6 +113,17 @@ export type FrameAgentHello = {
   "bootId"?: string;
   /** 重连时上报在途任务，供 hub 对账（契约 §4.4） */
   "inFlightTaskIds"?: string[];
+  /** agent 程序自身的版本信息（契约 v2.3），hub 只记录和展示，不做准入判断。版本事实源是 relkit 服务器 */
+  "app"?: {
+    /** 程序版本，如 0.3.4 */
+    "version": string;
+    /** 更新渠道：stable / dev；未接入更新的构建为 local */
+    "channel"?: string;
+    /** 运行平台，如 win32-x64、darwin-arm64 */
+    "platform"?: string;
+    /** 帧 body 层：允许对端新增未声明字段（契约 §0 演进策略） */
+    [key: string]: unknown;
+  };
 };
 
 /** FrameAgentHello 的入站视角：允许对端新增未声明字段（契约 §0）。用于接收/解析，不用于构造。 */
