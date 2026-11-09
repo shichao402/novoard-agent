@@ -15,6 +15,21 @@
       "type": "string",
       "pattern": "^\\d+\\.\\d+$",
       "description": "hub 侧契约版本，便于 agent 记录双方版本（契约 §8 可观测性）"
+    },
+    "packSources": {
+      "type": "array",
+      "description": "能力包来源清单（契约 v2.4）：agent 包管理器据此拉取能力包；缺省表示 hub 未下发",
+      "items": {
+        "type": "object",
+        "required": ["id", "git", "branch"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]*$" },
+          "git": { "type": "string", "minLength": 1 },
+          "branch": { "type": "string", "minLength": 1 },
+          "subdir": { "type": "string", "description": "包根在仓库内的相对路径，缺省为仓库根" }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": true

@@ -12,7 +12,7 @@
 
 | 编号 | 内容 | 依赖 | 主要文件 |
 | --- | --- | --- | --- |
-| A1 | 同步契约 v2.4 | Hub H1 | `src/contract/`、CI 固定 commit |
+| A1 | 同步契约 v2.4 | Hub H1（同批推送） | `src/contract/`、`src/card.mjs` |
 | A2 | 调度器 | A1 | 新 `src/scheduler.mjs`、`src/schedule-state.mjs` |
 | A3 | 路径锁与排队 | A1 | `src/agent-runtime.mjs` |
 | A4 | uses step | A1；novoard-packs P1 或 OSGToolset | `src/runner.mjs`、新 `src/packs/invoke.mjs` |
@@ -25,9 +25,10 @@
 - 按 ADR-0004 流程：
   - 更新 `src/contract/schemas/` 锁定拷贝；
   - `CONTRACT_VERSION` 改为 `2.4`；
-  - 更新 CI 固定的 Hub commit；
   - 执行 `npm run contract:gen-types`。
-- 验收：`npm test` 全绿。
+- CI 比对的是 Novoard main 上的当前契约（不固定 commit），因此 A1 必须与 Hub H1 同批推送。
+- 装载期拦截：A4 落地前，含 `uses` step 的定义在装载期直接拒绝，报错带 `targets.<id>.steps[i]` 位置；A4 落地时删除这道拦截。
+- 验收：`npm test` 全绿；含 `uses` 的定义被拒且报错带位置，含 `oncePerDay`/`deadline` 的定义正常装载。
 
 ## A2 调度器
 

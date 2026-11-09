@@ -21,6 +21,16 @@
       "properties": {
         "title": { "type": "string", "minLength": 1 },
         "schedule": { "type": "string", "description": "cron 表达式，调度归 agent 本地（ADR-0003）" },
+        "oncePerDay": {
+          "type": "boolean",
+          "default": true,
+          "description": "schedule 触发时同一天成功后不再触发；false 时按每个触发时刻去重（契约 v2.4）"
+        },
+        "deadline": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "description": "schedule 触发的硬截止（agent 时区 HH:mm）。触发时刻晚于它则取次日；到点停止剩余步骤（契约 v2.4）"
+        },
         "steps": {
           "type": "array",
           "minItems": 1,
@@ -79,7 +89,8 @@
         { "$ref": "#/$defs/stepScript" },
         { "$ref": "#/$defs/stepOpenApp" },
         { "$ref": "#/$defs/stepOpenPath" },
-        { "$ref": "#/$defs/stepTemplate" }
+        { "$ref": "#/$defs/stepTemplate" },
+        { "$ref": "#/$defs/stepUses" }
       ]
     },
     "stepScript": {
@@ -111,6 +122,28 @@
       "type": "object",
       "required": ["template"],
       "properties": { "template": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    "stepUses": {
+      "type": "object",
+      "required": ["uses"],
+      "properties": {
+        "uses": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9-]*/[a-z][a-z0-9-]*$",
+          "description": "<能力包 id>/<工具 id>（契约 v2.4）"
+        },
+        "with": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "number", "boolean", "array"],
+            "items": { "type": "string" }
+          }
+        },
+        "cwd": { "type": "string", "description": "工程根，传给工具 --project-root，也是路径锁的键" },
+        "retry": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "retryInterval": { "type": "string", "pattern": "^\\d+(s|m|h|d)$" }
+      },
       "additionalProperties": false
     }
   }

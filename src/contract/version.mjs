@@ -10,4 +10,4 @@
  * scripts/check-contract-copy.mjs 在设置 NOVOARD_HUB_ROOT 时会校验本常量与 SSOT 一致。
  * 字面格式统一为不带 `v` 前缀（契约 §0 的 contractVersion pattern 为 ^\d+\.\d+$）。
  */
-export const CONTRACT_VERSION = "2.3";
+export const CONTRACT_VERSION = "2.4";

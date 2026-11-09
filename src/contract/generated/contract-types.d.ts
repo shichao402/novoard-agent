@@ -82,6 +82,14 @@ export type FrameAgentHelloAck = {
   "inFlightTaskIds": string[];
   /** hub 侧契约版本，便于 agent 记录双方版本（契约 §8 可观测性） */
   "hubVersion"?: string;
+  /** 能力包来源清单（契约 v2.4）：agent 包管理器据此拉取能力包；缺省表示 hub 未下发 */
+  "packSources"?: {
+    "id": string;
+    "git": string;
+    "branch": string;
+    /** 包根在仓库内的相对路径，缺省为仓库根 */
+    "subdir"?: string;
+  }[];
 };
 
 /** FrameAgentHelloAck 的入站视角：允许对端新增未声明字段（契约 §0）。用于接收/解析，不用于构造。 */
@@ -184,7 +192,7 @@ export type Target = {
 
 export type TargetDefTarget = { "steps": unknown } | { "template": unknown };
 
-export type TargetDefStep = TargetDefStepScript | TargetDefStepOpenApp | TargetDefStepOpenPath | TargetDefStepTemplate;
+export type TargetDefStep = TargetDefStepScript | TargetDefStepOpenApp | TargetDefStepOpenPath | TargetDefStepTemplate | TargetDefStepUses;
 
 export type TargetDefStepScript = {
   "script": string;
@@ -204,6 +212,18 @@ export type TargetDefStepOpenPath = {
 
 export type TargetDefStepTemplate = {
   "template": string;
+};
+
+export type TargetDefStepUses = {
+  /** <能力包 id>/<工具 id>（契约 v2.4） */
+  "uses": string;
+  "with"?: {
+    [key: string]: string | number | boolean | string[];
+  };
+  /** 工程根，传给工具 --project-root，也是路径锁的键 */
+  "cwd"?: string;
+  "retry"?: number;
+  "retryInterval"?: string;
 };
 
 /** A2A task 对象（字面对齐 A2A spec，契约 §5.2） */

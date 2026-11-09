@@ -14,6 +14,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { createFrameValidator } from "../src/contract/frames.mjs";
+import { validateTargetsData } from "../src/card.mjs";
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const validator = createFrameValidator();
@@ -121,3 +122,28 @@ function collectInterpolationPoints(steps) {
   }
   return points;
 }
+
+// ---- 契约 v2.4 / PRD-7 A1：uses step 装载期拦截；oncePerDay/deadline 正常装载 ----
+const BASE_TARGET = { title: "t", expose: "a2a", audit: "summary", requiresApproval: false, notify: "always" };
+
+test("含 uses step 的 targets 在装载期被拒，报错带 targets.<id>.steps[i] 位置（A4 落地前）", () => {
+  const data = {
+    targets: {
+      nightly: { ...BASE_TARGET, steps: [{ script: "echo ok" }, { uses: "versionControl/svn-update", with: { path: "/tmp/x" } }] },
+    },
+  };
+  assert.ok(validator.targets(data).ok, "契约层面 uses step 本身合法");
+  const res = validateTargetsData(data, validator);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some((e) => e.startsWith("targets.nightly.steps[1]:") && e.includes("versionControl/svn-update")), res.errors.join("; "));
+});
+
+test("含 oncePerDay / deadline 的 targets 正常通过装载校验", () => {
+  const data = {
+    targets: {
+      daily: { ...BASE_TARGET, schedule: "0 3 * * *", oncePerDay: false, deadline: "08:30", steps: [{ script: "echo ok" }] },
+    },
+  };
+  const res = validateTargetsData(data, validator);
+  assert.ok(res.ok, res.errors?.join("; "));
+});

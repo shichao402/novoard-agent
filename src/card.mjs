@@ -39,7 +39,23 @@ export function validateTargetsData(data, validate) {
   if (!res.ok) {
     return { ok: false, reason: `targets 校验失败（纪律一）：${res.errors.join("; ")}`, errors: res.errors };
   }
+  const unsupported = Object.entries(data.targets).flatMap(([id, t]) => unsupportedUsesErrors(id, t.steps));
+  if (unsupported.length > 0) {
+    return { ok: false, reason: `targets 校验失败：${unsupported.join("; ")}`, errors: unsupported };
+  }
   return { ok: true, targets: data.targets };
+}
+
+/**
+ * 契约 v2.4 的 uses step 已能通过 schema，但本版还没有能力包运行时（PRD-7 A4）。
+ * 在装载期就报出位置与原因，不让它拖到运行时变成「未知 step 类型」。A4 落地时删掉这道拦截。
+ */
+export function unsupportedUsesErrors(targetId, steps, where = "steps") {
+  if (!Array.isArray(steps)) return [];
+  return steps.flatMap((step, i) =>
+    step && typeof step.uses === "string"
+      ? [`targets.${targetId}.${where}[${i}]: uses ${step.uses} 需要 agent 实现能力包（PRD-7 A4），当前版本不支持`]
+      : []);
 }
 
 /** 展开模板引用：target.template → templates/<name>.yaml 的 steps + vars 默认值（契约 §1.3）。 */
@@ -55,6 +71,10 @@ export function expandSteps({ targets, agentDir }) {
       return { ok: false, reason: `target ${id} 引用的模板不存在：${tplPath}` };
     }
     const tpl = parse(readFileSync(tplPath, "utf8"));
+    const unsupported = unsupportedUsesErrors(id, tpl?.steps, `template(${t.template}).steps`);
+    if (unsupported.length > 0) {
+      return { ok: false, reason: unsupported.join("; ") };
+    }
     out[id] = {
       ...t,
       vars: { ...(tpl.vars ?? {}), ...(t.vars ?? {}) }, // target vars 覆盖模板默认值
