@@ -106,6 +106,20 @@
   - 在 Windows 上用真实 OSGToolset 跑 `osg/doctor`，零改动通过。
   - 取消 `osg/cmake-build` 后，进程树中无残留进程。
 
+## 第 2 波实现偏差（2026-11-09）
+
+A2–A4 已实现，以下几处与上文规格不同，以实现为准：
+
+- 测试：cronkit 的 `cron-schedule.test.ts`、`store.test.ts` 与这里的接口对不上，没有逐条移植，改为新写 `test/scheduler.test.mjs`，覆盖上文验收场景以及失败重来、可重试拒绝、总开关、启动补跑、残留记录。
+- 去重：working、input-required 也算进行中；rejected 与 failed、canceled 同等处理。可重试拒绝除并发已满外还包括 agent-stopping。
+- 总开关：关闭时 tick 不触发，但手动 `catchUp()` 照样执行；启动 60 秒后的自动补跑只在总开关开启时执行。A7 控制台做完之前，开关只能手改 `schedule-state.json`。
+- 装载期检查：工具不存在不算定义错误，与包缺失一样交给 A6。参数校验遇到含 `{{}}` 的值跳过，留到运行期。
+- retry 缺省为 0，不按工具名硬编码重试次数；retryInterval 缺省 3 秒。
+- Hub 与对等触发只能靠帧上的 `metadata.from` 区分。
+- lowPriority 用 `os.setPriority` 实现。
+- 夹具放在 `test/fixtures-packs/fake`（放在 `test/fixtures/` 下会被 agent 定义校验扫到），共 9 个工具，多出的用于测重试、非幂等、独占工作区、写远端和平台限制。
+- Windows 验收（真实 OSGToolset 跑 `osg/doctor`、取消 `osg/cmake-build` 后查残留进程）按用户要求暂缓，出问题再修。
+
 ## A5 包管理
 
 - 安装目录 `<dataDir>/packs/<id>/`，即仓库克隆；包根为克隆目录加上 subdir。

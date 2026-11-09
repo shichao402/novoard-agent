@@ -29,6 +29,7 @@
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@tencent-ai/agent-sdk": "^0.3.282",
     "ajv": "^8.17.0",
+    "cron-parser": "^5.10.4",
     "ws": "^8.18.0",
     "yaml": "^2.5.0"
   },

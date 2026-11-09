@@ -1,0 +1,56 @@
+{
+  "id": "fake",
+  "displayName": "测试假包",
+  "schemaVersion": 1,
+  "runtime": "node",
+  "entry": "pack.mjs",
+  "tools": [
+    {
+      "id": "ok",
+      "displayName": "成功",
+      "idempotent": true,
+      "params": [
+        { "name": "name", "type": "string" },
+        { "name": "count", "type": "number" },
+        { "name": "dryFlag", "type": "boolean" },
+        { "name": "tags", "type": "string[]" },
+        { "name": "mode", "type": "enum", "enum": ["a", "b"] }
+      ]
+    },
+    { "id": "fail", "displayName": "失败", "idempotent": true },
+    { "id": "progress", "displayName": "进度", "idempotent": true },
+    {
+      "id": "sleep",
+      "displayName": "长睡",
+      "idempotent": true,
+      "params": [
+        { "name": "ms", "type": "number", "default": 30000 },
+        { "name": "pidFile", "type": "string" }
+      ]
+    },
+    {
+      "id": "hold",
+      "displayName": "独占工作区",
+      "idempotent": true,
+      "requiresExclusiveWorkspace": true,
+      "params": [
+        { "name": "ms", "type": "number", "default": 300 },
+        { "name": "mark", "type": "string" }
+      ]
+    },
+    {
+      "id": "flaky",
+      "displayName": "第一次失败",
+      "idempotent": true,
+      "params": [{ "name": "counter", "type": "string", "required": true }]
+    },
+    {
+      "id": "once",
+      "displayName": "非幂等",
+      "idempotent": false,
+      "params": [{ "name": "counter", "type": "string", "required": true }]
+    },
+    { "id": "push", "displayName": "写远端", "idempotent": false, "remoteWrite": true },
+    { "id": "winonly", "displayName": "仅 Windows", "platforms": ["win32"] }
+  ]
+}

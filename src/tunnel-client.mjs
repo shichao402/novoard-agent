@@ -446,6 +446,8 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
       skillId,
       vars: { ...runCfg.vars, ...vars },
       steps: runCfg.expanded,
+      // hub 目前不标注调用方是否为成员；带 from 的视为对等触发（PRD-7 A2 trigger 字段）
+      trigger: message.metadata?.from ? "peer" : "hub",
       onTerminal: (state, detail) => {
         uplink(env.taskId, statusNotification(env.taskId, state, detail));
       },

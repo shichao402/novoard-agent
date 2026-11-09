@@ -9,9 +9,9 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
-import { loadTargets, validateTargetsData, expandSteps, deriveCard } from "./card.mjs";
+import { loadTargets, validateTargetsData, validateUsesSteps, expandSteps, deriveCard } from "./card.mjs";
 
-export function createTargetsStore({ agentDir, agentId, log = console } = {}) {
+export function createTargetsStore({ agentDir, agentId, log = console, packs = null } = {}) {
   if (!agentDir) throw new Error("targets-store 需要 agentDir");
   const targetsPath = join(agentDir, "targets.yaml");
   const backupPath = join(agentDir, "targets.yaml.bak");
@@ -53,6 +53,9 @@ export function createTargetsStore({ agentDir, agentId, log = console } = {}) {
     // 模板引用预检：引用不存在的模板在写盘前拦下（与重启装载同一判据）
     const pre = expandSteps({ targets: check.targets, agentDir });
     if (!pre.ok) return { ok: false, errors: [pre.reason] };
+    // uses step 参数与 remoteWrite 审批（PRD-7 A4）：定义错误同样不上盘
+    const usesErrors = validateUsesSteps(pre.targets, packs);
+    if (usesErrors.length > 0) return { ok: false, errors: usesErrors };
 
     if (existsSync(targetsPath)) copyFileSync(targetsPath, backupPath);
     const tmpPath = `${targetsPath}.tmp`;

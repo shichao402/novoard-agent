@@ -73,8 +73,22 @@ export function loadAgentConfig({ configPath, env = process.env } = {}) {
     uiHost: ui.host,
     uiToken: ui.token,
     uiRemote: ui.remote,
+    // 定时调度（PRD-7 A2，可选）：{ timezone, catchUpPreviousDays, retryFailedOnCatchUp }
+    schedule: normalizeSchedule(data.schedule),
     // 历史持久化版本号：仅用于调用方提示，不参与握手（需求 4.2、8.4）
     staleContractVersion,
     file,
+  };
+}
+
+/** agent.json schedule 段：缺省时区为系统时区，补跑回看 1 天，失败不在补跑时重试（与 cronkit 相同）。 */
+export function normalizeSchedule(raw) {
+  const value = raw && typeof raw === "object" ? raw : {};
+  const timezone = typeof value.timezone === "string" && value.timezone.trim() ? value.timezone.trim() : "";
+  const days = Number(value.catchUpPreviousDays);
+  return {
+    timezone,
+    catchUpPreviousDays: Number.isInteger(days) && days >= 0 && days <= 7 ? days : 1,
+    retryFailedOnCatchUp: value.retryFailedOnCatchUp === true,
   };
 }

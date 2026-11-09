@@ -8,6 +8,7 @@ import { join, dirname } from "node:path";
 import { parse } from "yaml";
 import { createFrameValidator } from "./contract/frames.mjs";
 import { loadProfile } from "./profile.mjs";
+import { validateToolParams } from "./packs/validate.mjs";
 
 /** 保留技能：表示这台机器能用自然语言和别的成员对话。不能被 Target 占用。 */
 export const CONVERSE_SKILL_ID = "converse";
@@ -39,23 +40,44 @@ export function validateTargetsData(data, validate) {
   if (!res.ok) {
     return { ok: false, reason: `targets 校验失败（纪律一）：${res.errors.join("; ")}`, errors: res.errors };
   }
-  const unsupported = Object.entries(data.targets).flatMap(([id, t]) => unsupportedUsesErrors(id, t.steps));
-  if (unsupported.length > 0) {
-    return { ok: false, reason: `targets 校验失败：${unsupported.join("; ")}`, errors: unsupported };
-  }
   return { ok: true, targets: data.targets };
 }
 
 /**
- * 契约 v2.4 的 uses step 已能通过 schema，但本版还没有能力包运行时（PRD-7 A4）。
- * 在装载期就报出位置与原因，不让它拖到运行时变成「未知 step 类型」。A4 落地时删掉这道拦截。
+ * uses step 的装载期检查（PRD-7 A4，依据 ADR-0019 §6）。入参是展开后的 targets（含模板展开的 steps）。
+ * 定义错误（拒绝保存、启动失败）：with 不通过工具 params 校验；remoteWrite 工具所在 target 没有 requiresApproval: true。
+ * 不算定义错误、交给诊断（A6）：包没装、manifest 读不了、包里没有这个工具（多半是包版本旧）、平台不支持。
+ * with 中含 {{var}} 的值要到触发时才知道，装载期跳过它的类型检查，运行时再校验。
  */
-export function unsupportedUsesErrors(targetId, steps, where = "steps") {
-  if (!Array.isArray(steps)) return [];
-  return steps.flatMap((step, i) =>
-    step && typeof step.uses === "string"
-      ? [`targets.${targetId}.${where}[${i}]: uses ${step.uses} 需要 agent 实现能力包（PRD-7 A4），当前版本不支持`]
-      : []);
+export function validateUsesSteps(expandedTargets, packs) {
+  if (!packs) return [];
+  const errors = [];
+  for (const [id, t] of Object.entries(expandedTargets ?? {})) {
+    const steps = t.expanded ?? t.steps;
+    if (!Array.isArray(steps)) continue;
+    steps.forEach((step, i) => {
+      if (typeof step?.uses !== "string") return;
+      const slash = step.uses.indexOf("/");
+      if (slash <= 0) return;
+      const tool = packs.lookupTool(step.uses.slice(0, slash), step.uses.slice(slash + 1));
+      if (!tool) return;
+      const where = `targets.${id}.steps[${i}]`;
+      if (tool.remoteWrite === true && t.requiresApproval !== true) {
+        errors.push(`${where}: ${step.uses} 会写远端，所在 target 必须设 requiresApproval: true`);
+      }
+      const input = {};
+      const deferred = new Set();
+      for (const [k, v] of Object.entries(step.with ?? {})) {
+        const templated = typeof v === "string" ? v.includes("{{") : Array.isArray(v) && v.some((x) => typeof x === "string" && x.includes("{{"));
+        if (templated) deferred.add(k);
+        else input[k] = v;
+      }
+      const checked = validateToolParams(tool, input);
+      const real = checked.errors.filter((e) => ![...deferred].some((k) => e === `缺少必填参数: ${k}`));
+      for (const e of real) errors.push(`${where}: ${step.uses} 参数错误：${e}`);
+    });
+  }
+  return errors;
 }
 
 /** 展开模板引用：target.template → templates/<name>.yaml 的 steps + vars 默认值（契约 §1.3）。 */
@@ -71,10 +93,6 @@ export function expandSteps({ targets, agentDir }) {
       return { ok: false, reason: `target ${id} 引用的模板不存在：${tplPath}` };
     }
     const tpl = parse(readFileSync(tplPath, "utf8"));
-    const unsupported = unsupportedUsesErrors(id, tpl?.steps, `template(${t.template}).steps`);
-    if (unsupported.length > 0) {
-      return { ok: false, reason: unsupported.join("; ") };
-    }
     out[id] = {
       ...t,
       vars: { ...(tpl.vars ?? {}), ...(t.vars ?? {}) }, // target vars 覆盖模板默认值

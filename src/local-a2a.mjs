@@ -113,7 +113,11 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
   const getTargets = () => currentTargets ?? {};
 
   /** 触发本地执行：生成 taskId → runtime.launch → 状态落本地表。 */
-  function trigger({ skillId, vars = {} }) {
+  /**
+   * meta（定时调度用，PRD-7 A2）：trigger 触发来源（缺省 manual）、deadlineAt/deadlineLabel 硬截止、onState 状态回调。
+   * 返回值带 launch（runtime.launch 原始结果），调度器据此判断是否可重试。
+   */
+  function trigger({ skillId, vars = {}, trigger: source = "manual", deadlineAt, deadlineLabel, onState } = {}) {
     const def = getTargets()[skillId];
     if (!def) return { ok: false, reason: `unknown target: ${skillId}` };
     // taskId 用 task-local- 前缀：过 hub 信封 ^task- 校验（终态上行镜像合法），且与 hub 序列（task-YYYYMMDD-NNN）不撞形
@@ -128,7 +132,11 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
     const r = runtime.launch({
       taskId: id, skillId, vars,
       steps: def.expanded,
+      trigger: source,
+      deadlineAt,
+      deadlineLabel,
       onTerminal: (state, detail) => {
+        try { onState?.(state); } catch {}
         task.state = state;
         task.status = { state, message: detail ?? "" };
         task.updatedAt = new Date().toISOString();
@@ -150,7 +158,7 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
     } else if (r.log) {
       task.log = r.log;
     }
-    return { ok: true, task };
+    return { ok: true, task, launch: r };
   }
 
   // SSE 订阅（M4 subscribe 语义本地版）：taskId → Set<res>

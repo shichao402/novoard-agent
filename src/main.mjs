@@ -9,7 +9,10 @@ import { mkdirSync, appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadAgentConfig, pinEditionListenPort, pinPanelPort } from "./config.mjs";
-import { loadTargets, expandSteps, deriveCard } from "./card.mjs";
+import { loadTargets, expandSteps, deriveCard, validateUsesSteps } from "./card.mjs";
+import { createPackRegistry } from "./packs/registry.mjs";
+import { createScheduler, systemTimezone } from "./scheduler.mjs";
+import { createScheduleState, scheduleStatePath } from "./schedule-state.mjs";
 import { loadProfile, saveProfile } from "./profile.mjs";
 import { createPeerTalk } from "./peer-talk.mjs";
 import { createAgentRuntime } from "./agent-runtime.mjs";
@@ -56,7 +59,7 @@ export async function createLiteAgent(options = {}) {
   }
 }
 
-async function buildAgent({ agentDir, log = console, onFatal, onActivity, config, state }) {
+async function buildAgent({ agentDir, log = console, onFatal, onActivity, config, state, env = process.env, now }) {
   const dir = agentDir ?? (HERE ? join(HERE, "..", "..", "agents", config.agentId) : null);
   if (!dir) throw new Error("SEA/打包形态必须显式传 agentDir（sea-entry 以 cwd 锚定传入）");
   const auditFile = join(state, "audit.jsonl");
@@ -70,6 +73,10 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   if (!loaded.ok) throw new Error(loaded.reason);
   const expanded = expandSteps({ targets: loaded.targets, agentDir: dir });
   if (!expanded.ok) throw new Error(expanded.reason);
+  // 能力包（ADR-0019）：<stateDir>/packs/<id>/；NOVOARD_PACKS_DIR 可覆盖（测试与本机调试用）
+  const packs = createPackRegistry({ packsDir: env.NOVOARD_PACKS_DIR || join(state, "packs") });
+  const usesErrors = validateUsesSteps(expanded.targets, packs);
+  if (usesErrors.length > 0) throw new Error(`targets 校验失败：${usesErrors.join("; ")}`);
   const profileRef = { current: loadProfile(dir) };
   const card = deriveCard({ agentId: config.agentId, targets: loaded.targets, agentDir: dir, profile: profileRef.current });
   /** editor 保存后 card 热更新（tunnel 上报用新 card；hello 重连也带最新） */
@@ -84,15 +91,18 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     log,
     bootId,
     scriptEnv: scriptEnv.env,
+    packs,
     shortcutLogDir: join(logDir, "shortcuts"),
     runTraceDir: join(logDir, "runs"),
     onActivity,
   });
 
   // target 编辑器后端（M6）：保存 → 从盘重装载 → 热替换 runtime/localA2A 注册表 → card.update 上报 hub
-  const store = createTargetsStore({ agentDir: dir, agentId: config.agentId, log });
+  const store = createTargetsStore({ agentDir: dir, agentId: config.agentId, log, packs });
+  let currentExpanded = expanded.targets;
   const onTargetsSaved = (saved) => {
     runtime.replaceTargets(saved.expanded);
+    currentExpanded = saved.expanded;
     localA2A.refreshTargets(saved.expanded);
     cardRef.current = saved.card;
     peer?.replaceTargets(saved.expanded);
@@ -233,18 +243,49 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
 
   await tunnel.start();
 
+  // 定时调度（PRD-7 A2）：经本地触发入口执行，和磁贴手动触发同一条路（控制台可见、终态经 triggerHook 上行 hub）
+  const scheduler = createScheduler({
+    getTargets: () => currentExpanded,
+    state: createScheduleState({ file: scheduleStatePath(state) }),
+    timezone: resolveTimezone(config.schedule?.timezone, log),
+    catchUpPreviousDays: config.schedule?.catchUpPreviousDays ?? 1,
+    retryFailedOnCatchUp: config.schedule?.retryFailedOnCatchUp === true,
+    ...(now ? { now } : {}),
+    log,
+    launch: ({ skillId, trigger, deadlineAt, deadlineLabel, onState }) => {
+      const r = localA2A.trigger({ skillId, trigger, deadlineAt, deadlineLabel, onState });
+      if (!r.ok) return { ok: false, reason: r.reason };
+      const launched = r.launch ?? { ok: true };
+      return { ok: launched.ok, retryable: launched.retryable === true, reason: launched.reason, taskId: r.task?.id };
+    },
+  });
+  scheduler.start();
+  log.info?.(`[schedule] 定时${scheduler.status().enabled ? "已开启" : "未开启"}，时区 ${scheduler.timezone}`);
+
   /** 统一停机：关隧道 + localhost 端点（测试与优雅退出共用）。 */
   let stopped = false;
   async function stop() {
     if (stopped) return;
     stopped = true;
+    scheduler.stop();
     tunnel.close();
     chat.close();
     await runtime.shutdown();
     await localA2A.close();
   }
 
-  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, stop, agentDir: dir };
+  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, scheduler, packs, stop, agentDir: dir };
+}
+
+function resolveTimezone(configured, log) {
+  if (!configured) return systemTimezone();
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: configured });
+    return configured;
+  } catch {
+    log.warn?.(`[schedule] agent.json schedule.timezone=${configured} 无法识别，改用系统时区 ${systemTimezone()}`);
+    return systemTimezone();
+  }
 }
 
 const TERMINAL_STATES_SET = new Set(["completed", "failed", "canceled", "rejected"]);

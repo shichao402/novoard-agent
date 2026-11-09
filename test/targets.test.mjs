@@ -14,7 +14,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { createFrameValidator } from "../src/contract/frames.mjs";
-import { validateTargetsData } from "../src/card.mjs";
+import { validateTargetsData, validateUsesSteps } from "../src/card.mjs";
+import { createPackRegistry } from "../src/packs/registry.mjs";
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const validator = createFrameValidator();
@@ -123,10 +124,11 @@ function collectInterpolationPoints(steps) {
   return points;
 }
 
-// ---- 契约 v2.4 / PRD-7 A1：uses step 装载期拦截；oncePerDay/deadline 正常装载 ----
+// ---- 契约 v2.4 / PRD-7 A4：uses step 正常装载，装了包时按工具清单校验；oncePerDay/deadline 正常装载 ----
 const BASE_TARGET = { title: "t", expose: "a2a", audit: "summary", requiresApproval: false, notify: "always" };
+const fakePacks = createPackRegistry({ packsDir: join(FIXTURES_DIR, "..", "fixtures-packs") });
 
-test("含 uses step 的 targets 在装载期被拒，报错带 targets.<id>.steps[i] 位置（A4 落地前）", () => {
+test("含 uses step 的 targets 正常通过装载校验", () => {
   const data = {
     targets: {
       nightly: { ...BASE_TARGET, steps: [{ script: "echo ok" }, { uses: "versionControl/svn-update", with: { path: "/tmp/x" } }] },
@@ -134,8 +136,30 @@ test("含 uses step 的 targets 在装载期被拒，报错带 targets.<id>.step
   };
   assert.ok(validator.targets(data).ok, "契约层面 uses step 本身合法");
   const res = validateTargetsData(data, validator);
-  assert.equal(res.ok, false);
-  assert.ok(res.errors.some((e) => e.startsWith("targets.nightly.steps[1]:") && e.includes("versionControl/svn-update")), res.errors.join("; "));
+  assert.ok(res.ok, res.errors?.join("; "));
+});
+
+test("validateUsesSteps：参数不合法、写远端未开审批会报错，带 steps[i] 位置", () => {
+  const errors = validateUsesSteps({
+    a: { ...BASE_TARGET, steps: [{ script: "true" }, { uses: "fake/ok", with: { mode: "c" } }] },
+    b: { ...BASE_TARGET, steps: [{ uses: "fake/push" }] },
+    c: { ...BASE_TARGET, requiresApproval: true, steps: [{ uses: "fake/push" }] },
+  }, fakePacks);
+  assert.ok(errors.some((e) => e.startsWith("targets.a.steps[1]:") && e.includes("mode")), errors.join("; "));
+  assert.ok(errors.some((e) => e.startsWith("targets.b.steps[0]:") && e.includes("requiresApproval")), errors.join("; "));
+  assert.equal(errors.some((e) => e.startsWith("targets.c.")), false);
+});
+
+test("validateUsesSteps：插值参数留到运行期，未装的包和未知工具不报错", () => {
+  const errors = validateUsesSteps({
+    a: { ...BASE_TARGET, steps: [{ uses: "fake/flaky", with: { counter: "{{file}}" } }] },
+    b: { ...BASE_TARGET, steps: [{ uses: "notInstalled/x", with: { anything: 1 } }] },
+    c: { ...BASE_TARGET, steps: [{ uses: "fake/noSuchTool" }] },
+  }, fakePacks);
+  assert.deepEqual(errors, []);
+  const missing = validateUsesSteps({ a: { ...BASE_TARGET, steps: [{ uses: "fake/flaky" }] } }, fakePacks);
+  assert.ok(missing.some((e) => e.includes("counter")), missing.join("; "));
+  assert.deepEqual(validateUsesSteps({ a: { ...BASE_TARGET, steps: [{ uses: "fake/flaky" }] } }, null), []);
 });
 
 test("含 oncePerDay / deadline 的 targets 正常通过装载校验", () => {
