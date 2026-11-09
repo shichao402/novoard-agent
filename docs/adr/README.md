@@ -26,6 +26,7 @@
 | [0013](0013-hot-reload-scope.md) | 热替换只影响新触发，在途任务沿用旧定义 | Accepted | 2026-10-20 |
 | [0009](0009-launch-failure-must-be-terminal.md) | launch 失败必须当场变成终态并通知 | Accepted | 2026-10-20 |
 | [0008](0008-step-level-progress.md) | 进度以 step 为单位，开始与结束各发一次 | Accepted | 2026-10-20 |
+| [0019](0019-capability-pack-protocol.md) | 能力包协议：进程外调用，沿用 cronkit toolset schemaVersion 1 | Accepted | 2026-11-09 |
 
 ### 状态与通道
 

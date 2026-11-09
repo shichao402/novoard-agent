@@ -35,6 +35,12 @@
 4. **对端**：`caller` 改按会话索引；`watchRun` 改订阅；按节流推 `working`；`report` 接受显式 state；终态必达。
 5. **委派**：检查 `launch` 返回值，失败立即上行 `failed`；`message/resume` 成功时上行 `working`；`TERMINAL_OK` 补 `rejected`。
 
+## 改造 D2：定时调度与能力包（PRD-7）
+
+实现单见 [PRD-7](../prd/prd-7-schedule-and-capability-packs.md)。进度以 Novoard 仓 roadmap「跨仓：cronkit 吸收」表为准，本节不单独记状态。
+
+实施顺序：A1 → A2 / A3 / A4 并行 → A5 → A6 → A7。风险最高的是 A2：补跑和去重必须先移植 cronkit 测试，再写实现。
+
 ## 待排期
 
 - 任务表落盘与重启恢复（当前内存表，见 [ADR-0011](../adr/0011-task-table-in-memory.md)）。

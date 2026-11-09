@@ -14,6 +14,7 @@ agent 是"一份源码、多平台产物"的联邦成员，能力面分三层：
 | [PRD-4](prd-4-local-a2a-and-peer.md) 本地 A2A 与对等 | 本机 A2A 端点、对等触发 | 让别的 agent 派活，看到进展 | 契约 A2A 语义 |
 | [PRD-5](prd-5-hub-delegation.md) Hub 委派 | 注册、委派执行、重放 | 人不在也能远程触发 | Hub 契约 |
 | [PRD-6](prd-6-distribution-and-shell.md) 分发与桌面壳 | SEA 打包、轻壳、向导 | 装上就能用 | 多平台 CI |
+| [PRD-7](prd-7-schedule-and-capability-packs.md) 定时调度与能力包 | 本机定时、uses step、包管理、缺包诊断 | 每天的琐事自动做完，缺东西提前知道 | Hub 契约 v2.4；ADR-0019 |
 
 ## 共享术语
 
