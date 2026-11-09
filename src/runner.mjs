@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 
 const VAR_RE = /\{\{(\w+)\}\}/g;
 
-export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd(), timeoutMs = 0, onOutput = () => {}, onProgress = () => {}, onStepStart = () => {}, onStepEnd = () => {} } = {}) {
+export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd(), timeoutMs = 0, baseEnv = null, onOutput = () => {}, onProgress = () => {}, onStepStart = () => {}, onStepEnd = () => {} } = {}) {
   if (!Array.isArray(steps) || steps.length === 0) {
     throw new Error("steps 必须是非空数组");
   }
@@ -75,7 +75,7 @@ export function createRunner({ vars: targetVars = {}, steps, cwd = process.cwd()
       }
       const child = spawn(shell, [flag, cmd], {
         cwd: workDir,
-        env: env ? { ...process.env, ...env } : process.env,
+        env: env ? { ...(baseEnv ?? process.env), ...env } : (baseEnv ?? process.env),
         detached: process.platform !== "win32",
         windowsHide: true,
       });

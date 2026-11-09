@@ -13,7 +13,7 @@ const DEFAULT_TIMEOUT = "10m";
 const DEFAULT_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 32;
 
-export function createAgentRuntime({ targets, log = console, shortcutLogDir, runTraceDir, bootId = "", concurrency = MAX_CONCURRENCY, onActivity } = {}) {
+export function createAgentRuntime({ targets, log = console, shortcutLogDir, runTraceDir, bootId = "", concurrency = MAX_CONCURRENCY, onActivity, scriptEnv = null } = {}) {
   /** taskId → { state, runner?, waitTimer?, pending? } */
   const running = new Map();
   const executions = new Set();
@@ -103,6 +103,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
         vars: targetVarsOf(skillId),
         steps,
         timeoutMs,
+        baseEnv: scriptEnv,
         onOutput: (stream, text) => runLog?.output(stream, text),
         onProgress: (i, n) => onProgress?.(i, n, `第 ${i}/${n} 步`),
         onStepStart: ({ index, command }) => {

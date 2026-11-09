@@ -13,6 +13,7 @@ import { loadTargets, expandSteps, deriveCard } from "./card.mjs";
 import { loadProfile, saveProfile } from "./profile.mjs";
 import { createPeerTalk } from "./peer-talk.mjs";
 import { createAgentRuntime } from "./agent-runtime.mjs";
+import { resolveScriptEnv } from "./shell-env.mjs";
 import { createTunnelClient } from "./tunnel-client.mjs";
 import { resolveConsoleRoot } from "./console-ui.mjs";
 import { createLocalA2A } from "./local-a2a.mjs";
@@ -76,10 +77,13 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
 
   const logDir = dirname(log.file || join(dirname(state), "logs", "agent.jsonl"));
   const bootId = randomUUID();
+  const scriptEnv = resolveScriptEnv();
+  log.info?.(`[env] target 脚本环境：${scriptEnv.source}（${scriptEnv.detail}），PATH=${scriptEnv.env.PATH ?? ""}`);
   const runtime = createAgentRuntime({
     targets: expanded.targets,
     log,
     bootId,
+    scriptEnv: scriptEnv.env,
     shortcutLogDir: join(logDir, "shortcuts"),
     runTraceDir: join(logDir, "runs"),
     onActivity,
