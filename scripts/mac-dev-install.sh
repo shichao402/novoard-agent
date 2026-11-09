@@ -11,6 +11,7 @@
 # 两者是并排安装的两个应用，所以安装过程不会停掉正在执行本任务的 agent。
 # 不要把这个 target 配在开发版 agent 上，否则安装时会把自己停掉，任务会丢。
 set -euo pipefail
+export LC_ALL="${LC_ALL:-en_US.UTF-8}" LANG="${LANG:-en_US.UTF-8}"
 
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
@@ -59,7 +60,7 @@ cmd_build() {
   mkdir -p "$STATE_DIR"
   local started
   started="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  log "触发 dev 渠道发布（$REPO@$REF）"
+  log "触发 dev 渠道发布（$REPO@${REF}）"
   gh workflow run "$WORKFLOW" -R "$REPO" --ref "$REF"
 
   local run_id="" i
@@ -90,7 +91,7 @@ cmd_install() {
   MNT=""
   trap cleanup EXIT
 
-  log "下载构建产物 $art（run $run_id）"
+  log "下载构建产物 ${art}（run ${run_id}）"
   gh run download "$run_id" -R "$REPO" -n "$art" -D "$WORK"
   dmg="$(find "$WORK" -maxdepth 2 -name '*.dmg' | head -1)"
   [ -n "$dmg" ] || die "产物里没有 dmg"
