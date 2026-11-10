@@ -281,8 +281,9 @@ export function createRunner({
 
   function sleep(ms) {
     return new Promise((resolve) => {
+      // 不 unref：重试等待是真实的待办工作，unref 后若无其他句柄，进程会在等待中途退出。
+      // 取消时由 wakeSleep 立即唤醒，不会拖住退出。
       const timer = setTimeout(() => { wakeSleep = null; resolve(); }, ms);
-      timer.unref?.();
       wakeSleep = () => { clearTimeout(timer); wakeSleep = null; resolve(); };
     });
   }
