@@ -2,7 +2,7 @@
  * Tauri currentUser NSIS 的静默安装。
  *
  * /D 必须是最后一项，且不能加引号，否则 NSIS 不认安装目录。
- * 安装目录用 edition 的 installDirName，不拿可能带空格的产品名当文件夹。
+ * 安装目录用 edition 的 installDirName，并用 /D 钉死，盖过向导上次记住的位置。
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";

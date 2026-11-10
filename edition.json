@@ -25,7 +25,7 @@
     "shortName": "Novoard",
     "subtitle": "Dev",
     "identifier": "com.novoard.agent.dev",
-    "installDirName": "Novoard AgentDev",
+    "installDirName": "Novoard Agent Dev",
     "mark": "N",
     "markTone": "dev",
     "localPort": 52641,

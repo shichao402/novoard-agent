@@ -27,11 +27,11 @@ test("静默安装只传 /S，并用 /D 固定到正式版目录", () => {
   );
 });
 
-test("开发版安装包用产品名，静默目录用目录名加 Dev", () => {
+test("开发版安装包用产品名，静默目录是正式版目录名加空格 Dev", () => {
   const { release, dev } = loadEditions();
   const destination = `C:\\Users\\me\\AppData\\Local\\${dev.installDirName}`;
-  assert.equal(dev.installDirName, `${release.installDirName}Dev`);
-  assert.notEqual(dev.installDirName, dev.productName);
+  assert.equal(dev.installDirName, `${release.installDirName} Dev`);
+  assert.equal(destination, "C:\\Users\\me\\AppData\\Local\\Novoard Agent Dev");
   assert.equal(
     nsisSetupFileName(dev.productName, "0.3.2", "x64"),
     "Novoard Agent Dev_0.3.2_x64-setup.exe",

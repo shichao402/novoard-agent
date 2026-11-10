@@ -18,7 +18,7 @@ test("版本宏默认是 release，开发档由 NOVOARD_EDITION 选中", () => {
   assert.notEqual(release.productName, dev.productName);
   assert.notEqual(release.identifier, dev.identifier);
   assert.notEqual(release.icons[0], dev.icons[0]);
-  assert.equal(dev.installDirName, `${release.installDirName}Dev`);
+  assert.equal(dev.installDirName, `${release.installDirName} Dev`);
   assert.equal(dev.markTone, "dev");
   assert.equal(release.localPort, 41783);
   assert.equal(dev.localPort, 52641);

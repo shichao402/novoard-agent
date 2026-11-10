@@ -2,7 +2,7 @@
  * Windows 本地开发版部署。
  *
  * 与正式版同一条路：打 currentUser 的 NSIS，再用 /S /D= 静默安装到
- * %LOCALAPPDATA% 下 dev.installDirName（正式版目录名后加 Dev）。
+ * %LOCALAPPDATA% 下 dev.installDirName（正式版目录名后加空格和 Dev）。
  */
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
