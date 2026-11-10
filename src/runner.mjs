@@ -16,6 +16,27 @@ import { parseProgressLine, prepareInvocation, readResult, EXIT } from "./packs/
 const VAR_RE = /\{\{(\w+)\}\}/g;
 const DEFAULT_RETRY_INTERVAL_MS = 3_000;
 
+/**
+ * script step 的 shell 调用。Windows 与 Node 的 shell:true 一致：
+ * cmd /d /s /c "<命令>" 并关掉参数转义。否则 Node 会把命令里的引号写成 \"，
+ * cmd 不认，`start "" "带空格的路径"` 会被拆坏并挂住整个 step。
+ */
+export function shellInvocation(cmd, platform = process.platform, comspec = process.env.ComSpec) {
+  if (platform === "win32") {
+    return { file: comspec || "cmd.exe", args: ["/d", "/s", "/c", `"${cmd}"`], verbatim: true };
+  }
+  return { file: "/bin/sh", args: ["-c", cmd], verbatim: false };
+}
+
+/** openApp/openPath 平台化：win32 用 start，darwin 用 open，linux 用 xdg-open。 */
+export function openCommand(value, platform = process.platform) {
+  // Windows 路径不会含引号，直接包一层；JSON.stringify 会把反斜杠加倍
+  if (platform === "win32") return `start "" "${value}"`;
+  const quoted = JSON.stringify(value);
+  if (platform === "linux") return `xdg-open ${quoted}`;
+  return `open ${quoted}`;
+}
+
 export function createRunner({
   vars: targetVars = {},
   steps,
@@ -77,18 +98,23 @@ export function createRunner({
         index,
       });
     }
-    if (typeof step.openApp === "string") return execScript(openCmd(step.openApp, vars), { index });
-    if (typeof step.openPath === "string") return execScript(openCmd(step.openPath, vars), { index });
+    if (typeof step.openApp === "string") return execScript(openCmd(step.openApp, vars), { index, detachOutput: true });
+    if (typeof step.openPath === "string") return execScript(openCmd(step.openPath, vars), { index, detachOutput: true });
     if (typeof step.uses === "string") return execUses(step, vars, index);
     return Promise.resolve({ ok: false, stderr: `未知 step 类型：${JSON.stringify(Object.keys(step))}` });
   }
 
-  function execScript(cmd, { cwd: workDir, env, index }) {
-    const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
-    const flag = process.platform === "win32" ? "/c" : "-c";
+  /**
+   * detachOutput：openApp/openPath 拉起的是长驻 GUI，会继承 stdout/stderr 管道，
+   * 管道不关 step 就永远等不到 close（Windows 上必现）。这类 step 不接管道，只看启动命令的退出码。
+   */
+  function execScript(cmd, { cwd: workDir, env, index, detachOutput = false }) {
+    const shell = shellInvocation(cmd);
     return execProcess({
-      file: shell,
-      args: [flag, cmd],
+      file: shell.file,
+      args: shell.args,
+      verbatim: shell.verbatim,
+      detachOutput,
       cwd: workDir,
       env: env ? { ...(baseEnv ?? process.env), ...env } : (baseEnv ?? process.env),
       index,
@@ -139,7 +165,7 @@ export function createRunner({
     return last;
   }
 
-  function execProcess({ file, args, cwd: workDir, env, index, label, traceCommand, lowPriority = false, parseProgress = false, interpret = null }) {
+  function execProcess({ file, args, cwd: workDir, env, index, label, traceCommand, verbatim = false, detachOutput = false, lowPriority = false, parseProgress = false, interpret = null }) {
     return new Promise((resolve) => {
       let settled = false;
       const finish = (value) => {
@@ -161,6 +187,8 @@ export function createRunner({
           env,
           detached: process.platform !== "win32",
           windowsHide: true,
+          windowsVerbatimArguments: verbatim,
+          ...(detachOutput ? { stdio: "ignore" } : {}),
         });
       } catch (error) {
         try { onStepEnd({ index: index + 1, exit: 1 }); } catch {}
@@ -189,7 +217,7 @@ export function createRunner({
         stdout = tail(stdout, `${line}\n`);
         onOutput("stdout", `${line}\n`);
       };
-      child.stdout.on("data", (chunk) => {
+      child.stdout?.on("data", (chunk) => {
         const text = String(chunk);
         if (!parseProgress) {
           stdout = tail(stdout, text);
@@ -203,7 +231,7 @@ export function createRunner({
           lineBuf = lineBuf.slice(nl + 1);
         }
       });
-      child.stderr.on("data", (chunk) => {
+      child.stderr?.on("data", (chunk) => {
         const text = String(chunk);
         stderr = tail(stderr, text);
         onOutput("stderr", text);
@@ -246,12 +274,8 @@ export function createRunner({
     return `step ${index + 1}/${steps.length}: ${head.slice(0, 60)}`;
   }
 
-  /** openApp/openPath 平台化：win32 用 start，darwin 用 open，linux 用 xdg-open。 */
   function openCmd(target, vars) {
-    const value = JSON.stringify(interp(target, vars));
-    if (process.platform === "win32") return `start "" ${value}`;
-    if (process.platform === "linux") return `xdg-open ${value}`;
-    return `open ${value}`;
+    return openCommand(interp(target, vars));
   }
 
   /** 插值：无来源抛错（契约 §1.2），失败归入 target failed。 */
