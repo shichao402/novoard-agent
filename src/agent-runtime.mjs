@@ -17,7 +17,7 @@ const DEFAULT_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 32;
 const VAR_RE = /\{\{(\w+)\}\}/g;
 
-export function createAgentRuntime({ targets, log = console, shortcutLogDir, runTraceDir, bootId = "", concurrency = MAX_CONCURRENCY, onActivity, scriptEnv = null, packs = null, pathLocks = createPathLocks(), now = () => Date.now() } = {}) {
+export function createAgentRuntime({ targets, log = console, shortcutLogDir, runTraceDir, bootId = "", concurrency = MAX_CONCURRENCY, onActivity, scriptEnv = null, packs = null, packInstaller = null, pathLocks = createPathLocks(), now = () => Date.now() } = {}) {
   /** taskId → { state, runner?, queued?, ctx?, pending? } */
   const running = new Map();
   const executions = new Set();
@@ -135,6 +135,39 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
       ctx.deadlineTimer.unref?.();
     }
 
+    // 用户在场时的自动补装（PRD-7 A5）：只有手动/控制台触发（trigger=manual）才装；定时、补跑、hub、对等一律不装
+    if (trigger === "manual" && packInstaller?.needsInstall?.(steps)) {
+      running.set(taskId, { state: "working", queued: true, lock: null, ctx, skillId });
+      notifyActivity();
+      const installing = packInstaller
+        .ensureFor(steps, {
+          onProgress: (message) => {
+            ctx.runLog?.info(message);
+            try { onProgress?.(0, total, message); } catch {}
+          },
+        })
+        .catch((error) => ({ ok: false, reason: error?.message ?? String(error) }))
+        .then((r) => {
+          if (finished.has(taskId)) return;
+          if (!r.ok) {
+            finish(ctx, "failed", r.reason);
+            return;
+          }
+          if (stopping) {
+            finish(ctx, "canceled", "agent-stopping");
+            return;
+          }
+          lockThenBegin(ctx, input, timeoutMs, total);
+        })
+        .finally(() => executions.delete(installing));
+      executions.add(installing);
+      return { ok: true, reason: "installing-packs", log: ctx.runLog?.relative ?? null };
+    }
+    return lockThenBegin(ctx, input, timeoutMs, total);
+  }
+
+  function lockThenBegin(ctx, input, timeoutMs, total) {
+    const { taskId, skillId, vars, steps, onProgress } = input;
     const keys = lockKeysFor(steps, { ...targetVarsOf(skillId), ...(vars ?? {}) });
     const lock = pathLocks.acquire(keys);
     ctx.lock = lock;

@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { createFrameValidator } from "../../src/contract/frames.mjs";
 import { CONTRACT_VERSION } from "../../src/contract/version.mjs";
 
-export async function createMockHub({ port = 0, tokens = {}, helloSilence = false, hubContractVersion = CONTRACT_VERSION, log = { info() {}, error() {} } } = {}) {
+export async function createMockHub({ port = 0, tokens = {}, helloSilence = false, hubContractVersion = CONTRACT_VERSION, packSources, log = { info() {}, error() {} } } = {}) {
   const validate = createFrameValidator();
   const members = new Map(); // agentId -> { ws, card, lastSeen }
   const tasks = new Map(); // taskId -> { state, target, member, events: [] }
@@ -251,7 +251,7 @@ export async function createMockHub({ port = 0, tokens = {}, helloSilence = fals
         memberId = hello.agentId;
         members.set(hello.agentId, { ws, card: hello.card, lastSeen: Date.now() });
         // 确认对齐契约 §3：ops 帧 agent.hello.ack（agent 侧据 body.type 翻 registered）
-        ws.send(JSON.stringify({ v: 1, kind: "ops", msgId: `e-helloack-${Date.now()}`, ts: new Date().toISOString(), body: { type: "agent.hello.ack", inFlightTaskIds: hello.inFlightTaskIds ?? [], hubVersion: hubContractVersion } }));
+        ws.send(JSON.stringify({ v: 1, kind: "ops", msgId: `e-helloack-${Date.now()}`, ts: new Date().toISOString(), body: { type: "agent.hello.ack", inFlightTaskIds: hello.inFlightTaskIds ?? [], hubVersion: hubContractVersion, ...(packSources !== undefined ? { packSources } : {}) } }));
         // 信封 ack 一并回（未确认帧重放机制的应答）
         ws.send(JSON.stringify({ v: 1, kind: "ack", msgId: `ack-${frame.msgId}`, dedup: false }));
         // M2 flush 模拟：hello 后补下发 pendingOffline

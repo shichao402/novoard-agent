@@ -105,7 +105,7 @@ export function handleDesktopCors(req, res) {
   return false;
 }
 
-export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile } = {}) {
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile, packManager = null } = {}) {
   const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
@@ -465,6 +465,24 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
     }
     if (req.method === "GET" && url.pathname === "/api/profile") {
       json(res, 200, { ok: true, ...(profile?.read?.() ?? { role: "", introduction: "" }) });
+      return;
+    }
+    // 能力包管理（PRD-7 A5）：列出已装与已知来源；安装/更新/删除等操作完成后再返回结果
+    if (url.pathname === "/api/packs" && req.method === "GET") {
+      if (!packManager) return json(res, 404, { ok: false, reason: "能力包管理未装配" });
+      packManager.list().then((packs) => json(res, 200, { ok: true, packs })).catch((error) => json(res, 500, { ok: false, reason: error.message }));
+      return;
+    }
+    const packOp = url.pathname.match(/^\/api\/packs\/([A-Za-z][A-Za-z0-9-]*)(?:\/(install|update))?$/);
+    if (packOp && ((req.method === "POST" && packOp[2]) || (req.method === "DELETE" && !packOp[2]))) {
+      if (!packManager) return json(res, 404, { ok: false, reason: "能力包管理未装配" });
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      const [, id, action] = packOp;
+      const op = req.method === "DELETE" ? packManager.remove(id) : action === "install" ? packManager.install(id) : packManager.update(id);
+      op.then((r) => {
+        audit?.({ lane: "local", target: `pack:${id}`, outcome: r.ok ? "completed" : "failed", detail: { via: "console", action: action ?? "remove", ...(r.ok ? { version: r.version ?? null } : { code: r.code, reason: r.reason }) } });
+        json(res, r.ok ? 200 : r.code === "source-unknown" ? 404 : 422, r);
+      }).catch((error) => json(res, 500, { ok: false, reason: error.message }));
       return;
     }
     if (req.method === "PUT" && url.pathname === "/api/profile") {

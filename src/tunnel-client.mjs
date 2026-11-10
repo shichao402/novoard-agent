@@ -41,7 +41,7 @@ function callerParts(parts, text) {
   return outgoing;
 }
 
-export function createTunnelClient({ config, card, targets, runner, stateDir, runTraceDir, bootId = "", app, log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice } = {}) {
+export function createTunnelClient({ config, card, targets, runner, stateDir, runTraceDir, bootId = "", app, log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice, onPackSources } = {}) {
   if (!config?.ok) throw new Error(`lite-agent 配置无效：${config?.reason}`);
   const { agentId, hubUrl, agentToken, contractVersion } = config;
   const hubHttpUrl = new URL(hubUrl);
@@ -336,6 +336,10 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
         clearHelloDeadline();
         registered = true;
         backoffMs = RETRY_BASE_MS;
+        // 能力包来源（契约 v2.4，PRD-7 A5）：字段缺省 = hub 没下发，保留本地缓存；空数组 = 清空
+        if (Array.isArray(body.packSources)) {
+          try { onPackSources?.(body.packSources); } catch (error) { log.warn?.(`[packs] 缓存能力包来源失败：${error?.message ?? error}`); }
+        }
         // 重连对账：重放全部未确认上行帧（同 msgId，hub 幂等）
         for (const env of pending.values()) send(env);
         reportAbandonedRuns({

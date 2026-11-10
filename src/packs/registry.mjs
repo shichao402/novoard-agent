@@ -15,8 +15,27 @@ export function parseUses(uses) {
 }
 
 export function createPackRegistry({ packsDir } = {}) {
-  function rootOf(packId) {
+  /** 克隆目录 <packsDir>/<id>；包根 = 克隆目录 + subdir（manager 安装时记在 <packsDir>/.meta/<id>.json）。 */
+  function cloneDirOf(packId) {
     return packsDir ? join(packsDir, packId) : null;
+  }
+
+  function metaOf(packId) {
+    if (!packsDir) return null;
+    const file = join(packsDir, ".meta", `${packId}.json`);
+    if (!existsSync(file)) return null;
+    try {
+      return JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  function rootOf(packId) {
+    const dir = cloneDirOf(packId);
+    if (!dir) return null;
+    const subdir = metaOf(packId)?.subdir;
+    return typeof subdir === "string" && subdir ? join(dir, ...subdir.split("/")) : dir;
   }
 
   /** → { ok: true, root, manifest } | { ok: false, code, reason } */
@@ -51,18 +70,18 @@ export function createPackRegistry({ packsDir } = {}) {
     return pack.manifest.tools.find((t) => t.id === toolId) ?? null;
   }
 
-  /** 本机已装的包 id（目录下有 toolset.json 的子目录）。 */
+  /** 本机已装的包 id（包根下有 toolset.json 的子目录）。 */
   function list() {
     if (!packsDir || !existsSync(packsDir)) return [];
     return readdirSync(packsDir).filter((name) => {
       if (name.startsWith(".")) return false;
       try {
-        return statSync(join(packsDir, name)).isDirectory() && existsSync(join(packsDir, name, "toolset.json"));
+        return statSync(join(packsDir, name)).isDirectory() && existsSync(join(rootOf(name), "toolset.json"));
       } catch {
         return false;
       }
     });
   }
 
-  return { get, lookupTool, list, rootOf, packsDir };
+  return { get, lookupTool, list, rootOf, cloneDirOf, metaOf, packsDir };
 }

@@ -10,16 +10,11 @@ import { randomUUID } from "node:crypto";
 import { locateNode } from "../chat-bridge.mjs";
 import { parseUses } from "./registry.mjs";
 import { paramsToArgv, validateToolParams } from "./validate.mjs";
+import { depsStatus, venvPython } from "./deps.mjs";
 
 export const EXIT = { OK: 0, USAGE: 64, UNEXPECTED: 99, INTERRUPTED: 130 };
 
-export function resolvePython(root) {
-  const win = join(root, ".venv", "Scripts", "python.exe");
-  const nix = join(root, ".venv", "bin", "python");
-  if (existsSync(win)) return win;
-  if (existsSync(nix)) return nix;
-  return null;
-}
+export const resolvePython = venvPython;
 
 /** 当前平台是否被工具支持（platforms 缺省视为全平台）。 */
 export function platformSupported(tool, platform = process.platform) {
@@ -53,8 +48,9 @@ export function prepareInvocation({ registry, uses, params, projectRoot, dryRun 
     command = locateNode(env);
     if (!command) return { ok: false, code: "runtime-missing", reason: `找不到 Node，无法运行能力包 ${ref.packId}` };
   } else if (runtime === "python") {
-    command = resolvePython(pack.root);
-    if (!command) return { ok: false, code: "deps-not-ready", reason: `能力包 ${ref.packId} 依赖未就绪（缺少 .venv）` };
+    const deps = depsStatus(pack.root, pack.manifest);
+    command = deps.ready ? venvPython(pack.root) : null;
+    if (!command) return { ok: false, code: "deps-not-ready", reason: `能力包 ${ref.packId} 依赖未就绪（${deps.reason ?? "缺少 .venv"}）` };
   } else {
     return { ok: false, code: "runtime-unsupported", reason: `能力包 ${ref.packId} 的 runtime=${runtime} 不受支持` };
   }

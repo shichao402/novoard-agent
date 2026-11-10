@@ -11,6 +11,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadAgentConfig, pinEditionListenPort, pinPanelPort } from "./config.mjs";
 import { loadTargets, expandSteps, deriveCard, validateUsesSteps } from "./card.mjs";
 import { createPackRegistry } from "./packs/registry.mjs";
+import { createPackManager } from "./packs/manager.mjs";
+import { createSourcesCache, packSourcesPath } from "./packs/sources-cache.mjs";
 import { createScheduler, systemTimezone } from "./scheduler.mjs";
 import { createScheduleState, scheduleStatePath } from "./schedule-state.mjs";
 import { loadProfile, saveProfile } from "./profile.mjs";
@@ -75,6 +77,15 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   if (!expanded.ok) throw new Error(expanded.reason);
   // 能力包（ADR-0019）：<stateDir>/packs/<id>/；NOVOARD_PACKS_DIR 可覆盖（测试与本机调试用）
   const packs = createPackRegistry({ packsDir: env.NOVOARD_PACKS_DIR || join(state, "packs") });
+  const packSources = createSourcesCache({ file: packSourcesPath(state), log });
+  // 包管理（PRD-7 A5）：安装/更新/删除结束（成功或失败）都重派生 Card 并发 card.update
+  const packManager = createPackManager({
+    registry: packs,
+    sources: packSources,
+    log,
+    env,
+    onChange: ({ id, result }) => refreshCard(`能力包 ${id} ${result.ok ? "已变更" : `操作失败：${result.reason}`}`),
+  });
   const usesErrors = validateUsesSteps(expanded.targets, packs);
   if (usesErrors.length > 0) throw new Error(`targets 校验失败：${usesErrors.join("; ")}`);
   const profileRef = { current: loadProfile(dir) };
@@ -92,6 +103,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     bootId,
     scriptEnv: scriptEnv.env,
     packs,
+    packInstaller: packManager,
     shortcutLogDir: join(logDir, "shortcuts"),
     runTraceDir: join(logDir, "runs"),
     onActivity,
@@ -110,7 +122,25 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     tunnel.replaceCard?.(saved.card);
     const up = tunnel.sendCardUpdate?.(saved.card);
     log.info?.(`[editor] 热生效：runtime/磁贴/委派查表已切新定义，card.update ${up?.ok ? "已上报 hub" : `未上报（${up?.reason ?? "hub 离线"}）`}`);
+    // 用户在场时的自动补装（PRD-7 A5）：保存后缺包且来源已知就在后台装
+    const steps = Object.values(saved.expanded ?? {}).flatMap((t) => t.expanded ?? []);
+    if (packManager.needsInstall(steps)) {
+      packManager.ensureFor(steps).then((r) => {
+        if (!r.ok) log.warn?.(`[packs] 保存后自动补装失败：${r.reason}`);
+      });
+    }
   };
+
+  /** 重派生 Card 并上报（profile 保存、包变更共用）。 */
+  function refreshCard(why) {
+    const current = store.read();
+    const next = deriveCard({ agentId: config.agentId, targets: current.ok ? current.targets : loaded.targets, agentDir: dir, profile: profileRef.current });
+    cardRef.current = next;
+    tunnel?.replaceCard?.(next);
+    const up = tunnel?.sendCardUpdate?.(next);
+    log.info?.(`[card] ${why}，card.update ${up?.ok ? "已上报 hub" : `未上报（${up?.reason ?? "hub 离线"}）`}`);
+    return next;
+  }
 
   let peer = null;
   // 历史 agent.json 里可能写着旧版本号（升级只换二进制不重装的环境）：契约版本以代码常量为准，
@@ -133,6 +163,10 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     onFatal,
     onAgentMessage: (message) => peer?.receive(message),
     onAgentNotice: (message) => peer?.note(message),
+    onPackSources: (list) => {
+      const r = packSources.replace(list);
+      log.info?.(`[packs] 已缓存 hub 下发的能力包来源 ${r.count} 条`);
+    },
   });
   peer = createPeerTalk({
     agentId: config.agentId,
@@ -221,15 +255,11 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
         if (!saved.ok) return saved;
         profileRef.current = { role: saved.role, introduction: saved.introduction };
         peer.replaceProfile(profileRef.current);
-        const current = store.read();
-        const next = deriveCard({ agentId: config.agentId, targets: current.ok ? current.targets : loaded.targets, agentDir: dir, profile: profileRef.current });
-        cardRef.current = next;
-        tunnel.replaceCard?.(next);
-        const up = tunnel.sendCardUpdate?.(next);
-        log.info?.(`[profile] 已更新自我介绍，card.update ${up?.ok ? "已上报 hub" : `未上报（${up?.reason ?? "hub 离线"}）`}`);
+        refreshCard("已更新自我介绍");
         return { ok: true, role: saved.role, introduction: saved.introduction };
       },
     },
+    packManager,
   });
   const localAddr = await localA2A.start();
   const panelHost = config.uiHost.includes(":") ? `[${config.uiHost}]` : config.uiHost;
@@ -274,7 +304,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     await localA2A.close();
   }
 
-  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, scheduler, packs, stop, agentDir: dir };
+  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, scheduler, packs, packManager, packSources, stop, agentDir: dir };
 }
 
 function resolveTimezone(configured, log) {

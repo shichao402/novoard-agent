@@ -136,6 +136,21 @@ A2–A4 已实现，以下几处与上文规格不同，以实现为准：
 - 安装成功或失败、删除包都会重新派生 Card，并发送 `card.update`。
 - 验收：在 Hub 配置 osg 来源后，控制台点一次安装，`doctor` 可以运行；改动包内文件再点更新，patch 文件生成，工作区恢复干净。
 
+### A5 实现偏差（2026-11-09）
+
+以实现为准：
+
+- 包根定位：安装时把来源快照写到 `<dataDir>/packs/.meta/<id>.json`，registry 据其中的 subdir 找包根。没有 meta 的目录（手放的包、测试夹具）包根就是克隆目录。
+- 安装先 clone 到 `packs/.tmp-<id>-*`，确认包根下有 toolset.json 后再改名到位，失败不留残目录。依赖准备失败时克隆保留，状态为依赖未就绪，再点更新即可重试。
+- `.deps-ok` 放在 `.venv/.deps-ok`。没有 requirements.txt 时按空内容算哈希。运行时 python 包改为同时校验 `.deps-ok` 哈希，不再只看 `.venv` 是否存在。
+- patch 用 `git diff HEAD`，已暂存的改动也会备份。
+- 更新时来源已从 Hub 删除，退回 meta 里的快照继续更新。
+- 同一个包的安装、更新、删除串行合并：并发请求拿同一个结果。
+- 自动补装只认 `trigger=manual`（磁贴、控制台、CLI 都走这里）。保存 target 后的补装在后台进行，不阻塞保存。来源未知的缺包不装，执行时照常报 pack-missing。
+- 控制台接口（UI 留给 A7）：`GET /api/packs`、`POST /api/packs/:id/install`、`POST /api/packs/:id/update`、`DELETE /api/packs/:id`，写接口校验同源并记本地审计。
+- Card 目前不含包信息，重派生后内容不变，仍按规格发 `card.update`，A6 加诊断后才有实际差异。
+- 验收在 macOS 上用本机 OSGToolset 仓做来源跑通：安装、建 venv、pip、`osg/doctor` 被调起，改文件后更新生成 patch、工作区干净。doctor 自身报"缺少工具: python"，这是 OSGToolset 要求 PATH 上有 `python`（Windows 工作机的情况），与包管理无关。
+
 ## A6 缺包诊断与预检
 
 ### 诊断函数
