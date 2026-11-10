@@ -11,13 +11,14 @@ import { parseDuration } from "./duration.mjs";
 import { createShortcutRun } from "./shortcut-log.mjs";
 import { openRunTrace } from "./run-trace.mjs";
 import { createPathLocks, normalizePathKey } from "./path-locks.mjs";
+import { formatProblems } from "./packs/diagnose.mjs";
 
 const DEFAULT_TIMEOUT = "10m";
 const DEFAULT_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 32;
 const VAR_RE = /\{\{(\w+)\}\}/g;
 
-export function createAgentRuntime({ targets, log = console, shortcutLogDir, runTraceDir, bootId = "", concurrency = MAX_CONCURRENCY, onActivity, scriptEnv = null, packs = null, packInstaller = null, pathLocks = createPathLocks(), now = () => Date.now() } = {}) {
+export function createAgentRuntime({ targets, log = console, shortcutLogDir, runTraceDir, bootId = "", concurrency = MAX_CONCURRENCY, onActivity, scriptEnv = null, packs = null, packInstaller = null, diagnose = null, pathLocks = createPathLocks(), now = () => Date.now() } = {}) {
   /** taskId → { state, runner?, queued?, ctx?, pending? } */
   const running = new Map();
   const executions = new Set();
@@ -168,6 +169,13 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
 
   function lockThenBegin(ctx, input, timeoutMs, total) {
     const { taskId, skillId, vars, steps, onProgress } = input;
+    // 运行时诊断（PRD-7 A6）：注定失败的不排队、不起进程，诊断文字直接作为失败原因
+    const problems = diagnose?.(steps) ?? [];
+    if (problems.length > 0) {
+      ctx.visibleReason = true;
+      finish(ctx, "failed", formatProblems(problems));
+      return { ok: true, reason: "diagnosed", log: ctx.runLog?.relative ?? null };
+    }
     const keys = lockKeysFor(steps, { ...targetVarsOf(skillId), ...(vars ?? {}) });
     const lock = pathLocks.acquire(keys);
     ctx.lock = lock;
@@ -255,11 +263,13 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
     runLog?.info(`结束 state=${state} elapsed=${elapsed}ms`);
     emitTrace(ctx, { type: "run/end", state, target: skillId });
     log.info?.(`[shortcut] 结束 target=${skillId} task=${taskId} state=${state} elapsed=${elapsed}ms${runLog ? ` log=${runLog.relative}` : ""}`);
-    const summary = state === "failed" && text.includes("运行超时")
-      ? "运行超时"
-      : state === "failed" && text.includes("硬截止")
-        ? text
-        : state === "failed" ? "失败" : "";
+    const summary = state === "failed" && ctx.visibleReason
+      ? text
+      : state === "failed" && text.includes("运行超时")
+        ? "运行超时"
+        : state === "failed" && text.includes("硬截止")
+          ? text
+          : state === "failed" ? "失败" : "";
     try { onTerminal?.(state, summary); } catch { /* 状态回调不能把并发计数弄乱 */ }
   }
 

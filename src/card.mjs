@@ -106,8 +106,12 @@ function expandedAll(out) {
   return Object.values(out).every((t) => Array.isArray(t.expanded) && t.expanded.length >= 1);
 }
 
-/** 从自我介绍和 targets 派生 Agent Card。介绍给其他成员看；Target 只是其中的技能。 */
-export function deriveCard({ agentId, targets, agentDir, profile, description, version = "1.0.0" }) {
+/**
+ * 从自我介绍和 targets 派生 Agent Card。介绍给其他成员看；Target 只是其中的技能。
+ * unavailable：诊断有 error 的 target id（PRD-7 A6），不写进 Card，别的成员看不到也就不会派来注定失败的任务。
+ */
+export function deriveCard({ agentId, targets, agentDir, profile, description, version = "1.0.0", unavailable = [] }) {
+  const hidden = new Set(unavailable ?? []);
   const intro = profile ?? (agentDir ? loadProfile(agentDir) : { role: "", introduction: "" });
   const introduction = String(intro.introduction || description || `${agentId} 上的 Novoard agent`).trim();
   const role = String(intro.role ?? "").trim();
@@ -122,7 +126,7 @@ export function deriveCard({ agentId, targets, agentDir, profile, description, v
       "x-novoard-kind": "agent",
     },
     ...Object.entries(targets)
-    .filter(([, t]) => t.expose === "a2a")
+    .filter(([id, t]) => t.expose === "a2a" && !hidden.has(id))
     .map(([id, t]) => {
       const skill = {
         id,

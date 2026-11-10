@@ -10,6 +10,8 @@ import { CronExpressionParser } from "cron-parser";
 export const TICK_MS = 20_000;
 export const ON_TIME_WINDOW_MS = 3 * 60_000;
 export const STARTUP_CATCH_UP_MS = 60_000;
+/** 预检窗口（PRD-7 A6）：下次触发前 60 分钟内检查一次能不能跑。 */
+export const PRECHECK_WINDOW_MS = 60 * 60_000;
 
 const IN_FLIGHT = new Set(["queued", "running", "working", "input-required"]);
 const RETRYABLE_FAIL = new Set(["failed", "canceled", "rejected"]);
@@ -113,10 +115,14 @@ export function createScheduler({
   log = console,
   tickMs = TICK_MS,
   startupCatchUpMs = STARTUP_CATCH_UP_MS,
+  onPrecheck = null,
+  precheckWindowMs = PRECHECK_WINDOW_MS,
   timers = { setInterval, clearInterval, setTimeout, clearTimeout },
 } = {}) {
   let interval = null;
   let startupTimer = null;
+  /** 已预检过的 `<id>|<nextRun ISO>`，同一时刻只预检一次（进程内记忆，重启后再检一次无妨）。 */
+  const prechecked = new Set();
 
   function scheduledTargets() {
     return Object.entries(getTargets?.() ?? {}).filter(([, t]) => typeof t?.schedule === "string" && t.schedule.trim());
@@ -184,7 +190,32 @@ export function createScheduler({
       log.info?.(`[schedule] 触发 ${id} trigger=${trigger} slot=${prev.toISOString()}${deadlineLabel ? ` deadline=${deadlineLabel}` : ""}`);
       fired.push({ id, trigger, key, slot: prev.toISOString(), deadlineAt });
     }
+    if (!force) precheck(at);
     return fired;
+  }
+
+  /** 预检（PRD-7 A6）：下次触发落在窗口内、且这个时刻没预检过，就回调 onPrecheck。只在定时开启时由常规 tick 调。 */
+  function precheck(at) {
+    if (!onPrecheck) return [];
+    const checked = [];
+    for (const [id, target] of scheduledTargets()) {
+      const next = nextRunIso(target.schedule, timezone, new Date(at));
+      if (!next) continue;
+      const nextAt = Date.parse(next);
+      const ahead = nextAt - at;
+      if (ahead <= 0 || ahead > precheckWindowMs) continue;
+      const key = `${id}|${next}`;
+      if (prechecked.has(key)) continue;
+      if (prechecked.size > 1000) prechecked.clear();
+      prechecked.add(key);
+      checked.push(id);
+      try {
+        onPrecheck({ id, target, nextRun: next, label: hhmm(timezone, nextAt) });
+      } catch (error) {
+        log.warn?.(`[schedule] ${id} 预检回调失败：${error?.message ?? error}`);
+      }
+    }
+    return checked;
   }
 
   function catchUp() {
@@ -237,6 +268,7 @@ export function createScheduler({
     stop,
     tick,
     catchUp,
+    precheck: (at = now()) => precheck(at),
     status,
     setEnabled: (value) => state.setEnabled(value),
     get timezone() {

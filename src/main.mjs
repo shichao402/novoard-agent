@@ -13,6 +13,7 @@ import { loadTargets, expandSteps, deriveCard, validateUsesSteps } from "./card.
 import { createPackRegistry } from "./packs/registry.mjs";
 import { createPackManager } from "./packs/manager.mjs";
 import { createSourcesCache, packSourcesPath } from "./packs/sources-cache.mjs";
+import { createDiagnoser, createGitCheck, formatProblems } from "./packs/diagnose.mjs";
 import { createScheduler, systemTimezone } from "./scheduler.mjs";
 import { createScheduleState, scheduleStatePath } from "./schedule-state.mjs";
 import { loadProfile, saveProfile } from "./profile.mjs";
@@ -88,8 +89,10 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   });
   const usesErrors = validateUsesSteps(expanded.targets, packs);
   if (usesErrors.length > 0) throw new Error(`targets 校验失败：${usesErrors.join("; ")}`);
+  // 诊断（PRD-7 A6）：现在跑会失败的 target 不进 Card；磁贴标红；定时前 60 分钟预检
+  const diagnoser = createDiagnoser({ registry: packs, sources: packSources, gitAvailable: createGitCheck({ env }) });
   const profileRef = { current: loadProfile(dir) };
-  const card = deriveCard({ agentId: config.agentId, targets: loaded.targets, agentDir: dir, profile: profileRef.current });
+  const card = deriveCard({ agentId: config.agentId, targets: loaded.targets, agentDir: dir, profile: profileRef.current, unavailable: diagnoser.unavailable(expanded.targets) });
   /** editor 保存后 card 热更新（tunnel 上报用新 card；hello 重连也带最新） */
   const cardRef = { current: card };
 
@@ -104,13 +107,14 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     scriptEnv: scriptEnv.env,
     packs,
     packInstaller: packManager,
+    diagnose: (steps) => diagnoser.diagnoseSteps(steps),
     shortcutLogDir: join(logDir, "shortcuts"),
     runTraceDir: join(logDir, "runs"),
     onActivity,
   });
 
   // target 编辑器后端（M6）：保存 → 从盘重装载 → 热替换 runtime/localA2A 注册表 → card.update 上报 hub
-  const store = createTargetsStore({ agentDir: dir, agentId: config.agentId, log, packs });
+  const store = createTargetsStore({ agentDir: dir, agentId: config.agentId, log, packs, diagnoser });
   let currentExpanded = expanded.targets;
   const onTargetsSaved = (saved) => {
     runtime.replaceTargets(saved.expanded);
@@ -134,7 +138,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   /** 重派生 Card 并上报（profile 保存、包变更共用）。 */
   function refreshCard(why) {
     const current = store.read();
-    const next = deriveCard({ agentId: config.agentId, targets: current.ok ? current.targets : loaded.targets, agentDir: dir, profile: profileRef.current });
+    const next = deriveCard({ agentId: config.agentId, targets: current.ok ? current.targets : loaded.targets, agentDir: dir, profile: profileRef.current, unavailable: diagnoser.unavailable(currentExpanded) });
     cardRef.current = next;
     tunnel?.replaceCard?.(next);
     const up = tunnel?.sendCardUpdate?.(next);
@@ -194,6 +198,8 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   // 本地 A2A 端点（ADR-0008；PRD-1 触发路径统一：磁贴/热键/CLI → 本机端点）
   // hub 在线时终态经隧道上行（triggerHook）；离线时本地闭环（PRD-1 AC2）
   const codebuddyFile = join(dirname(state), "codebuddy.json");
+  /** 调度器在 localA2A 之后创建；控制台定时接口经此引用访问，启动完成前返回未就绪。 */
+  const scheduleRef = { current: null };
   const chat = createChatBridge({ dataDir: state, codebuddyFile, log });
   const localA2A = createLocalA2A({
     port: Number(config.localPort ?? 0),
@@ -260,6 +266,22 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
       },
     },
     packManager,
+    diagnoseTarget: (target) => diagnoser.diagnoseTarget(target),
+    schedule: {
+      status: () => scheduleRef.current?.status() ?? null,
+      setEnabled: (value) => {
+        if (!scheduleRef.current) return { ok: false, reason: "定时调度还没启动" };
+        scheduleRef.current.setEnabled(value);
+        log.info?.(`[schedule] 定时已${value ? "开启" : "关闭"}（控制台）`);
+        return { ok: true, enabled: scheduleRef.current.status().enabled };
+      },
+      catchUp: () => {
+        if (!scheduleRef.current) return { ok: false, reason: "定时调度还没启动" };
+        const fired = scheduleRef.current.catchUp();
+        log.info?.(`[schedule] 控制台立即补跑，触发 ${fired.length} 项`);
+        return { ok: true, fired: fired.map((f) => ({ id: f.id, trigger: f.trigger, slot: f.slot })) };
+      },
+    },
   });
   const localAddr = await localA2A.start();
   const panelHost = config.uiHost.includes(":") ? `[${config.uiHost}]` : config.uiHost;
@@ -288,7 +310,16 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
       const launched = r.launch ?? { ok: true };
       return { ok: launched.ok, retryable: launched.retryable === true, reason: launched.reason, taskId: r.task?.id };
     },
+    // 预检（PRD-7 A6）：下次触发前 60 分钟内看一眼，现在跑会失败就提前告诉主人
+    onPrecheck: ({ id, target, label }) => {
+      const problems = diagnoser.diagnoseTarget(target).filter((p) => p.level === "error");
+      if (!problems.length) return;
+      const text = `【预检】${config.agentId} 的「${target.title ?? id}」将在 ${label} 运行，现在看会失败：\n${formatProblems(problems)}`;
+      const sent = tunnel.notifyOwner?.(text) ?? { ok: false, reason: "no-tunnel" };
+      log.warn?.(`[schedule] 预检 ${id} 有 ${problems.length} 个问题，通知${sent.ok ? "已发送" : `未发送（${sent.reason}）`}`);
+    },
   });
+  scheduleRef.current = scheduler;
   scheduler.start();
   log.info?.(`[schedule] 定时${scheduler.status().enabled ? "已开启" : "未开启"}，时区 ${scheduler.timezone}`);
 
@@ -304,7 +335,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     await localA2A.close();
   }
 
-  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, scheduler, packs, packManager, packSources, stop, agentDir: dir };
+  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, scheduler, packs, packManager, packSources, diagnoser, stop, agentDir: dir };
 }
 
 function resolveTimezone(configured, log) {

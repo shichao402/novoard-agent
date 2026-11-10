@@ -198,6 +198,21 @@ A2–A4 已实现，以下几处与上文规格不同，以实现为准：
 - 新增"能力包"页：每个来源一行，显示 id、版本、状态（来自诊断），带"安装"或"更新"按钮。来源只读，修改请去 Hub 管理台。
 - 全部用开关和按钮操作，没有需要手输的字段。
 
+## 第 4 波实现偏差（2026-11-10）
+
+A6、A7 已实现，配套的 novoard-packs P4–P5、OSGToolset O2–O3 也一并完成。以实现为准：
+
+- 诊断：六种 code 全部是 error 级别，目前没有 warning 级。manifest 读不出或不合法时也报 tool-missing，action 同样是一键更新。
+- 预检：去重记录只放在内存里，agent 重启后同一时刻可能再预检一次、再发一条通知。
+- Card：targets-store 派生 Card 时不带 profile，这是原有行为，本波未改。
+- 控制台接口：新增 `GET /api/schedule`、`PUT /api/schedule`（body `{enabled: boolean}`，类型不对返回 400）、`POST /api/schedule/catch-up`。写接口校验同源并记本地审计，未装配调度返回 404，未就绪返回 503。磁贴接口附带 problems、schedule、nextRun、lastScheduled。
+- novoard-packs CLI：在 ADR-0019 的退出码之外，工具自身失败（result.code 非 0）返回 1。CLI 只设 24 小时兜底上限，真正的超时由 agent runner 负责。每次运行的日志写到 `<tmp>/novoard-packs/`，非 dry-run 时 stdout 第一行给出路径。
+- 进度：svn-update 报三个阶段加文件计数，计数按 1 秒节流，百分比封顶 99，完成时报 100。Unity 百分比只从含 DisplayProgressbar 的日志行解析。
+- OSGToolset：SIGTERM（Windows 另含 SIGBREAK）转成中断，结束自己启动的子进程后写 result json（summary「已取消」，exitCode 130）并返回 130。cmake-build、csharp-compile 输出阶段帧，并从 MSBuild 的 `xxx.vcxproj -> ...`、make 的 `[ 45%]`、ninja 的 `[12/40]` 行折算进度。另外修了一个原有问题：流式输出原来按 4KB 整块读，进度和日志都不实时，现在改为有多少读多少，并按行解码。
+- 平台限制（原有行为）：macOS 上 svn-update 会附带「未自动释放占用」，因为只有 win32 才释放占用；Unity 编辑器发现只扫描 Windows 路径。
+- Windows：agent 的 `taskkill /T` 第一次不带 /F，对控制台进程通常无效，所以 O2 的优雅收尾实际只在 POSIX 上生效；Windows 上 3 秒后的 `/F` 强杀照常兜底。Windows 验收按用户要求暂缓。
+- 验收：端到端在 macOS 上用 agent 的 runner 对真实 file:// svn 仓库跑通 versionControl/svn-update，状态 completed，进度显示正常。手机收到预检通知这一条没有实测，只有单测覆盖。
+
 ## 不在范围
 
 - 其他 A2A 成员接入、跨成员联动 step。

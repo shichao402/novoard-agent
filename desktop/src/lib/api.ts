@@ -22,6 +22,8 @@ export type Settings = {
   contractVersion: string;
 };
 
+export type TileProblem = { step: number; uses: string; code: string; level: "error" | "warning"; message: string; action: string };
+
 export type Tile = {
   id: string;
   title: string;
@@ -29,7 +31,13 @@ export type Tile = {
   concurrency?: number;
   timeout?: string;
   last: { state: string; message?: string; at?: string; log?: string | null } | null;
+  problems?: TileProblem[];
+  schedule?: string;
+  nextRun?: string | null;
+  lastScheduled?: { status: string; trigger?: string; slot?: string; at?: number; taskId?: string | null } | null;
 };
+
+export type ScheduleInfo = { enabled: boolean; timezone: string };
 
 export type TargetStep =
   | { script: string; cwd?: string; env?: Record<string, string> }
@@ -105,7 +113,37 @@ export function saveSetup(base: string, input: { hubUrl: string; agentId: string
 }
 
 export function getTiles(base: string) {
-  return request<{ tiles: Tile[]; tasks: Array<{ id: string; target: string; state: string; updatedAt?: string }> }>(base, "/api/tiles");
+  return request<{ tiles: Tile[]; tasks: Array<{ id: string; target: string; state: string; updatedAt?: string }>; schedule?: ScheduleInfo | null }>(base, "/api/tiles");
+}
+
+export function setScheduleEnabled(base: string, enabled: boolean) {
+  return request<{ ok: boolean; enabled: boolean }>(base, "/api/schedule", { method: "PUT", body: JSON.stringify({ enabled }) });
+}
+
+export function catchUpNow(base: string) {
+  return request<{ ok: boolean; fired: Array<{ id: string; trigger: string; slot: string }> }>(base, "/api/schedule/catch-up", { method: "POST", body: "{}" });
+}
+
+export type PackEntry = {
+  id: string;
+  installed: boolean;
+  busy: boolean;
+  source: { id: string; git: string; branch: string; subdir?: string } | null;
+  version?: string | null;
+  displayName?: string;
+  depsReady?: boolean;
+  depsReason?: string;
+  problem?: string;
+};
+
+export function listPacks(base: string) {
+  return request<{ ok: boolean; packs: PackEntry[] }>(base, "/api/packs");
+}
+
+export function packAction(base: string, id: string, action: "install" | "update" | "remove") {
+  return action === "remove"
+    ? request<{ ok: boolean; reason?: string }>(base, `/api/packs/${encodeURIComponent(id)}`, { method: "DELETE" })
+    : request<{ ok: boolean; reason?: string; version?: string | null; patch?: string }>(base, `/api/packs/${encodeURIComponent(id)}/${action}`, { method: "POST", body: "{}" });
 }
 
 export function runTarget(base: string, id: string) {
@@ -337,7 +375,7 @@ export function getTargets(base: string) {
 }
 
 export function saveTargets(base: string, targets: Record<string, TargetDef>) {
-  return request<{ ok: boolean; count: number }>(base, "/api/targets", {
+  return request<{ ok: boolean; count: number; warnings?: Array<TileProblem & { target: string }> }>(base, "/api/targets", {
     method: "PUT",
     body: JSON.stringify({ targets }),
   });

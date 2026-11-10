@@ -198,7 +198,12 @@ export function TargetsPage({ base }: { base: string }) {
       const result = await saveTargets(base, targets);
       setOriginal(targets);
       setBaseline(JSON.stringify(drafts));
-      setStatus(`已保存 ${result.count} 个 Target，并已热生效。`);
+      const warned = new Set((result.warnings ?? []).map((w) => w.target));
+      setStatus(
+        warned.size
+          ? `已保存 ${result.count} 个 Target。${[...warned].join("、")} 现在跑会失败，已从 Hub 隐藏，详情看快捷操作页的红色提示。`
+          : `已保存 ${result.count} 个 Target，并已热生效。`,
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "保存失败");
     } finally {

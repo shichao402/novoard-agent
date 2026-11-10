@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { loadTargets, validateTargetsData, validateUsesSteps, expandSteps, deriveCard } from "./card.mjs";
 
-export function createTargetsStore({ agentDir, agentId, log = console, packs = null } = {}) {
+export function createTargetsStore({ agentDir, agentId, log = console, packs = null, diagnoser = null } = {}) {
   if (!agentDir) throw new Error("targets-store 需要 agentDir");
   const targetsPath = join(agentDir, "targets.yaml");
   const backupPath = join(agentDir, "targets.yaml.bak");
@@ -67,9 +67,11 @@ export function createTargetsStore({ agentDir, agentId, log = console, packs = n
     if (!loaded.ok) return { ok: false, errors: [loaded.reason] };
     const expanded = expandSteps({ targets: loaded.targets, agentDir });
     if (!expanded.ok) return { ok: false, errors: [expanded.reason] };
-    const card = deriveCard({ agentId, targets: loaded.targets, agentDir });
-    log.info?.(`[editor] targets.yaml 已保存并重装载（${Object.keys(loaded.targets).length} 个 target）`);
-    return { ok: true, raw: loaded.targets, expanded: expanded.targets, card };
+    const card = deriveCard({ agentId, targets: loaded.targets, agentDir, unavailable: diagnoser?.unavailable(expanded.targets) ?? [] });
+    // 诊断（PRD-7 A6）：能保存，但现在跑会失败的情况作为 warnings 返回，界面据此提示
+    const warnings = Object.entries(diagnoser?.diagnoseAll(expanded.targets) ?? {}).flatMap(([target, list]) => list.map((p) => ({ target, ...p })));
+    log.info?.(`[editor] targets.yaml 已保存并重装载（${Object.keys(loaded.targets).length} 个 target${warnings.length ? `，${warnings.length} 条诊断警告` : ""}）`);
+    return { ok: true, raw: loaded.targets, expanded: expanded.targets, card, warnings };
   }
 
   return { read, save, targetsPath, backupPath };

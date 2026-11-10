@@ -105,7 +105,7 @@ export function handleDesktopCors(req, res) {
   return false;
 }
 
-export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile, packManager = null } = {}) {
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile, packManager = null, diagnoseTarget = null, schedule = null } = {}) {
   const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
@@ -311,20 +311,52 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
         audit?.({ lane: "local", target: "targets", outcome: "accepted", detail: { via: "editor", count: Object.keys(saved.raw).length, targets: Object.keys(saved.raw) } });
         onTargetsSaved?.(saved);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: true, count: Object.keys(saved.raw).length }));
+        res.end(JSON.stringify({ ok: true, count: Object.keys(saved.raw).length, warnings: saved.warnings ?? [] }));
       });
       return;
     }
     // 磁贴数据：targets 全量 + 各 target 最近一次执行（US5 状态点/上次时间）
+    // PRD-7 A6/A7：再带诊断问题（problems）和定时信息（schedule、nextRun、上次定时结果 lastScheduled）
     if (req.method === "GET" && url.pathname === "/api/tiles") {
+      const sched = schedule?.status?.() ?? null;
+      const byId = new Map((sched?.targets ?? []).map((s) => [s.id, s]));
       const tiles = Object.entries(getTargets())
         .filter(([, t]) => t.expose !== "none")
         .map(([id, t]) => {
           const last = tasks.lastOf(id);
-          return { id, title: t.title ?? id, requiresApproval: t.requiresApproval === true, concurrency: t.concurrency ?? 1, timeout: t.timeout ?? "10m", icon: t.icon ?? "▶", last: last ? { state: last.state, message: last.status.message, at: last.updatedAt, log: last.log ?? null } : null };
+          const s = byId.get(id);
+          return {
+            id, title: t.title ?? id, requiresApproval: t.requiresApproval === true, concurrency: t.concurrency ?? 1, timeout: t.timeout ?? "10m", icon: t.icon ?? "▶",
+            last: last ? { state: last.state, message: last.status.message, at: last.updatedAt, log: last.log ?? null } : null,
+            problems: diagnoseTarget?.(t) ?? [],
+            ...(t.schedule ? { schedule: t.schedule, nextRun: s?.nextRun ?? null, lastScheduled: s?.last ?? null } : {}),
+          };
         });
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ tiles, tasks: tasks.list().slice(0, 20) }));
+      res.end(JSON.stringify({ tiles, tasks: tasks.list().slice(0, 20), schedule: sched ? { enabled: sched.enabled, timezone: sched.timezone } : null }));
+      return;
+    }
+    // 定时总开关与立即补跑（PRD-7 A7）
+    if (url.pathname === "/api/schedule" && req.method === "GET") {
+      const sched = schedule?.status?.();
+      if (!sched) return json(res, 503, { ok: false, reason: "定时调度还没启动" });
+      return json(res, 200, { ok: true, ...sched });
+    }
+    if ((url.pathname === "/api/schedule" && req.method === "PUT") || (url.pathname === "/api/schedule/catch-up" && req.method === "POST")) {
+      if (!schedule) return json(res, 404, { ok: false, reason: "定时调度未装配" });
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      if (req.method === "POST") {
+        const r = schedule.catchUp();
+        audit?.({ lane: "local", target: "schedule", outcome: r.ok ? "accepted" : "failed", detail: { via: "console", action: "catch-up", ...(r.ok ? { fired: r.fired.map((f) => f.id) } : { reason: r.reason }) } });
+        return json(res, r.ok ? 200 : 503, r);
+      }
+      readJsonBody(req).then((body) => {
+        if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+        if (typeof body.data?.enabled !== "boolean") return json(res, 400, { ok: false, reason: "需要 enabled: true|false" });
+        const r = schedule.setEnabled(body.data.enabled);
+        audit?.({ lane: "local", target: "schedule", outcome: r.ok ? "accepted" : "failed", detail: { via: "console", action: body.data.enabled ? "enable" : "disable" } });
+        json(res, r.ok ? 200 : 503, r);
+      }).catch((error) => json(res, 500, { ok: false, reason: error.message }));
       return;
     }
     // SSE：订阅指定 task（GET /api/stream/:id）

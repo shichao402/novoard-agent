@@ -1,11 +1,60 @@
-import { Play, ScrollText } from "lucide-react";
+import { AlertTriangle, Clock, Play, RotateCcw, ScrollText } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import type { Tile } from "@/lib/api";
-import { getShortcutLog, getShortcutRuns, runTarget, type ShortcutRun } from "@/lib/api";
+import { Switch } from "@/components/ui/switch";
+import type { ScheduleInfo, Tile } from "@/lib/api";
+import { catchUpNow, getShortcutLog, getShortcutRuns, runTarget, setScheduleEnabled, type ShortcutRun } from "@/lib/api";
 import { formatTime } from "@/lib/utils";
 
-export function ActionsPage({ base, tiles, onOpenTargets }: { base: string; tiles: Tile[]; onOpenTargets: () => void }) {
+const STATE_LABEL: Record<string, string> = { completed: "完成", failed: "失败", canceled: "已取消", rejected: "被拒绝", queued: "排队中", running: "运行中", working: "运行中", "input-required": "等待确认" };
+
+export function ActionsPage({
+  base,
+  tiles,
+  schedule,
+  onChanged,
+  onOpenTargets,
+  onOpenPacks,
+}: {
+  base: string;
+  tiles: Tile[];
+  schedule: ScheduleInfo | null;
+  onChanged: () => void;
+  onOpenTargets: () => void;
+  onOpenPacks: () => void;
+}) {
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [scheduleNote, setScheduleNote] = useState("");
+  const hasScheduled = tiles.some((tile) => tile.schedule);
+
+  async function toggleSchedule(enabled: boolean) {
+    setScheduleBusy(true);
+    setError("");
+    try {
+      await setScheduleEnabled(base, enabled);
+      setScheduleNote(enabled ? "定时已开启" : "定时已关闭，到点不会自动运行");
+      onChanged();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "切换失败");
+    } finally {
+      setScheduleBusy(false);
+    }
+  }
+
+  async function catchUp() {
+    setScheduleBusy(true);
+    setError("");
+    try {
+      const result = await catchUpNow(base);
+      setScheduleNote(result.fired.length ? `已补跑 ${result.fired.map((f) => f.id).join("、")}` : "没有需要补跑的");
+      onChanged();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "补跑失败");
+    } finally {
+      setScheduleBusy(false);
+    }
+  }
+
   const [pending, setPending] = useState<string | null>(null);
   const [live, setLive] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
@@ -104,6 +153,23 @@ export function ActionsPage({ base, tiles, onOpenTargets }: { base: string; tile
 
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col">
+      {schedule && hasScheduled ? (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3">
+          <Clock size={16} className="text-muted" />
+          <span className="text-sm">定时</span>
+          <Switch checked={schedule.enabled} label="定时总开关" onChange={(next) => { if (!scheduleBusy) void toggleSchedule(next); }} />
+          <span className="text-xs text-muted">{schedule.enabled ? "到点自动运行" : "已关闭"} · 时区 {schedule.timezone}</span>
+          <button
+            className="ml-auto flex h-8 items-center gap-1 rounded-lg border border-line px-3 text-xs text-muted hover:bg-panel-hi hover:text-ink disabled:opacity-60"
+            disabled={scheduleBusy}
+            onClick={() => void catchUp()}
+          >
+            <RotateCcw size={13} />
+            立即补跑
+          </button>
+          {scheduleNote ? <span className="w-full text-[11px] text-faint">{scheduleNote}</span> : null}
+        </div>
+      ) : null}
       {error ? <p className="mb-3 text-sm text-bad" role="alert">{error}</p> : null}
       {tiles.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-line-hi px-6 py-16 text-center">
@@ -113,7 +179,7 @@ export function ActionsPage({ base, tiles, onOpenTargets }: { base: string; tile
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {tiles.map((tile) => (
-            <div key={tile.id} className="rounded-2xl border border-line bg-panel p-4">
+            <div key={tile.id} className={`rounded-2xl border bg-panel p-4 ${tile.problems?.length ? "border-bad/60" : "border-line"}`}>
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-medium">{tile.title}</div>
@@ -146,6 +212,26 @@ export function ActionsPage({ base, tiles, onOpenTargets }: { base: string; tile
                 {tile.requiresApproval ? " · 执行前会再确认" : ""}
               </div>
               <div className="mt-1 text-[11px] text-faint">同时 {tile.concurrency ?? 1} 个 · 超时 {tile.timeout ?? "10m"}</div>
+              {tile.schedule ? (
+                <div className="mt-1 text-[11px] text-faint">
+                  定时 <span className="font-mono">{tile.schedule}</span>
+                  {" · 下次 "}{tile.nextRun ? formatTime(tile.nextRun) : "—"}
+                  {tile.lastScheduled ? ` · 上次定时 ${STATE_LABEL[tile.lastScheduled.status] ?? tile.lastScheduled.status}${tile.lastScheduled.at ? ` ${formatTime(new Date(tile.lastScheduled.at).toISOString())}` : ""}` : ""}
+                </div>
+              ) : null}
+              {tile.problems?.length ? (
+                <div className="mt-3 space-y-2 rounded-xl bg-bad/10 px-3 py-2 text-xs text-bad" role="alert">
+                  {tile.problems.map((p, i) => (
+                    <div key={`${p.step}-${p.code}-${i}`}>
+                      <div className="flex items-start gap-1"><AlertTriangle size={12} className="mt-0.5 shrink-0" />第 {p.step} 步 {p.uses}：{p.message}</div>
+                      <div className="ml-4 text-muted">{p.action}</div>
+                    </div>
+                  ))}
+                  {tile.problems.some((p) => ["pack-missing", "deps-not-ready", "tool-missing"].includes(p.code)) ? (
+                    <button className="ml-4 text-accent hover:text-accent-hi" onClick={onOpenPacks}>去能力包页</button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>

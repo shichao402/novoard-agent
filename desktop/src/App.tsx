@@ -1,25 +1,27 @@
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { LayoutDashboard, MessageSquare, ScrollText, Settings, SquareTerminal, Zap } from "lucide-react";
+import { LayoutDashboard, MessageSquare, Package, ScrollText, Settings, SquareTerminal, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EditionMark } from "@/components/edition-mark";
 import { edition } from "@/lib/edition";
-import { apiBase, getRuntime, getTiles, type Endpoint, type Runtime, type Tile } from "@/lib/api";
+import { apiBase, getRuntime, getTiles, type Endpoint, type Runtime, type ScheduleInfo, type Tile } from "@/lib/api";
 import { ActionsPage } from "@/pages/actions-page";
 import { ChatPage } from "@/pages/chat-page";
 import { HomePage } from "@/pages/home-page";
 import { LogsPage } from "@/pages/logs-page";
+import { PacksPage } from "@/pages/packs-page";
 import { SettingsPage } from "@/pages/settings-page";
 import { SetupPage } from "@/pages/setup-page";
 import { TargetsPage } from "@/pages/targets-page";
 
-type View = "home" | "chat" | "actions" | "targets" | "logs" | "settings";
+type View = "home" | "chat" | "actions" | "targets" | "packs" | "logs" | "settings";
 
 const NAV: Array<{ id: View; label: string; icon: typeof LayoutDashboard }> = [
   { id: "home", label: "概览", icon: LayoutDashboard },
   { id: "chat", label: "对话", icon: MessageSquare },
   { id: "actions", label: "快捷操作", icon: Zap },
   { id: "targets", label: "Target", icon: SquareTerminal },
+  { id: "packs", label: "能力包", icon: Package },
   { id: "logs", label: "日志", icon: ScrollText },
   { id: "settings", label: "设置", icon: Settings },
 ];
@@ -40,6 +42,8 @@ export function App() {
   const [view, setView] = useState<View>("home");
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [tiles, setTiles] = useState<Tile[]>([]);
+  const [schedule, setSchedule] = useState<ScheduleInfo | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     const unlisten: Array<() => void> = [];
@@ -85,7 +89,7 @@ export function App() {
     const load = () => {
       const mine = ++ticket;
       void getRuntime(base).then((value) => { if (!cancelled && mine === ticket) setRuntime(value); }).catch(() => { if (!cancelled && mine === ticket) setRuntime(null); });
-      void getTiles(base).then((value) => { if (!cancelled && mine === ticket) setTiles(value.tiles ?? []); }).catch(() => { if (!cancelled && mine === ticket) setTiles([]); });
+      void getTiles(base).then((value) => { if (!cancelled && mine === ticket) { setTiles(value.tiles ?? []); setSchedule(value.schedule ?? null); } }).catch(() => { if (!cancelled && mine === ticket) setTiles([]); });
     };
     load();
     const timer = window.setInterval(load, 4000);
@@ -93,7 +97,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [base, setup]);
+  }, [base, setup, reloadTick]);
 
   if (!base) {
     return (
@@ -155,8 +159,9 @@ export function App() {
         <div className={`min-h-0 flex-1 ${view === "chat" || view === "logs" ? "overflow-hidden p-4" : "overflow-auto p-5"}`}>
           {view === "home" ? <HomePage base={base} runtime={runtime} tiles={tiles} onOpen={(next) => setView(next)} /> : null}
           {view === "chat" ? <ChatPage base={base} /> : null}
-          {view === "actions" ? <ActionsPage base={base} tiles={tiles} onOpenTargets={() => setView("targets")} /> : null}
+          {view === "actions" ? <ActionsPage base={base} tiles={tiles} schedule={schedule} onChanged={() => setReloadTick((n) => n + 1)} onOpenTargets={() => setView("targets")} onOpenPacks={() => setView("packs")} /> : null}
           {view === "targets" ? <TargetsPage base={base} /> : null}
+          {view === "packs" ? <PacksPage base={base} /> : null}
           {view === "logs" ? <LogsPage base={base} /> : null}
           {view === "settings" ? <SettingsPage base={base} onRestart={() => setToast("正在用新配置重新连接 Hub…")} /> : null}
         </div>
