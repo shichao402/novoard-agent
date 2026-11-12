@@ -91,6 +91,52 @@ test("配置工具经本机接口执行，跑 Target 只走 A2A", async () => {
   assert.equal(calls.at(-1).method, "PUT");
 });
 
+test("能力包与定时工具走对应的本机接口", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const path = String(url).replace("http://127.0.0.1:9", "");
+    calls.push({ path, method: init?.method ?? "GET", body: init?.body });
+    if (path === "/api/packs") {
+      return { ok: true, json: async () => ({ ok: true, packs: [
+        { id: "versionControl", sourceKey: "src-aaa", installed: true, version: "c31cb5b", source: { git: "https://x/p.git", subdir: "packs/versionControl" }, depsReady: true },
+        { id: null, sourceKey: "src-bbb", installed: false, source: { git: "https://x/p.git", subdir: "packs/general" } },
+      ] }) };
+    }
+    if (path === "/api/packs/tools") {
+      return { ok: true, json: async () => ({ ok: true, platform: "darwin", timezone: "Asia/Shanghai", scheduleEnabled: false, packs: [{ id: "versionControl", tools: [] }, { id: "general", tools: [] }] }) };
+    }
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  const opts = { origin: "http://127.0.0.1:9", fetchImpl };
+  const listed = JSON.parse(await dispatchNovoardTool("novoard_list_packs", {}, opts));
+  assert.deepEqual(listed.packs.map((p) => p.installKey), ["versionControl", "src-bbb"]);
+  const tools = JSON.parse(await dispatchNovoardTool("novoard_pack_tools", { pack: "general" }, opts));
+  assert.deepEqual(tools.packs.map((p) => p.id), ["general"]);
+  await assert.rejects(dispatchNovoardTool("novoard_pack_tools", { pack: "osg" }, opts), /没有装能力包 osg/);
+  await dispatchNovoardTool("novoard_install_pack", { key: "src-bbb" }, opts);
+  assert.deepEqual(calls.at(-1), { path: "/api/packs/src-bbb/install", method: "POST", body: "{}" });
+  await dispatchNovoardTool("novoard_install_pack", { key: "versionControl", action: "update" }, opts);
+  assert.equal(calls.at(-1).path, "/api/packs/versionControl/update");
+  await assert.rejects(dispatchNovoardTool("novoard_install_pack", { key: "../x" }, opts), /installKey/);
+  await dispatchNovoardTool("novoard_get_schedule", {}, opts);
+  assert.deepEqual(calls.at(-1), { path: "/api/schedule", method: "GET", body: undefined });
+  await dispatchNovoardTool("novoard_set_schedule", { enabled: true }, opts);
+  assert.deepEqual(calls.at(-1), { path: "/api/schedule", method: "PUT", body: JSON.stringify({ enabled: true }) });
+  await assert.rejects(dispatchNovoardTool("novoard_set_schedule", {}, opts), /enabled/);
+  await dispatchNovoardTool("novoard_schedule_catch_up", {}, opts);
+  assert.equal(calls.at(-1).path, "/api/schedule/catch-up");
+});
+
+test("本机会话 skill 名与内容覆盖能力包和定时", async () => {
+  const { NOVOARD_SKILL, NOVOARD_SKILL_NAME, NOVOARD_SKILL_LEGACY_NAMES } = await import("../src/novoard-skill.mjs");
+  assert.equal(NOVOARD_SKILL_NAME, "novoard-agent-ops");
+  assert.ok(NOVOARD_SKILL_LEGACY_NAMES.includes("novoard-agent"));
+  assert.match(NOVOARD_SKILL, new RegExp(`^---\\nname: ${NOVOARD_SKILL_NAME}\\n`));
+  for (const tool of ["novoard_list_packs", "novoard_pack_tools", "novoard_install_pack", "novoard_get_schedule", "novoard_set_schedule", "novoard_schedule_catch_up"]) {
+    assert.ok(NOVOARD_SKILL.includes(tool), `skill 应提到 ${tool}`);
+  }
+});
+
 test("会话桥可以创建、发送并删除", async () => {
   const dir = mkdtempSync(join(tmpdir(), "novoard-bridge-"));
   const worker = join(dir, "fake-worker.mjs");
@@ -155,4 +201,16 @@ test("执行记录从审计文件读出，重启后还在", async () => {
     await local.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("会话工具声明、白名单与实现一一对应", async () => {
+  const { readFileSync } = await import("node:fs");
+  const worker = readFileSync(new URL("../src/chat-worker.mjs", import.meta.url), "utf8");
+  const tools = readFileSync(new URL("../src/novoard-tools.mjs", import.meta.url), "utf8");
+  const declared = [...worker.matchAll(/^\s*\["(novoard_[a-z_]+)",/gm)].map((m) => m[1]).sort();
+  const allowed = [...worker.matchAll(/"mcp__novoard__(novoard_[a-z_]+)"/g)].map((m) => m[1]).sort();
+  const handled = [...tools.matchAll(/name === "(novoard_[a-z_]+)"/g)].map((m) => m[1]).sort();
+  assert.ok(declared.length >= 20);
+  assert.deepEqual(allowed, declared);
+  assert.deepEqual(handled, declared);
 });

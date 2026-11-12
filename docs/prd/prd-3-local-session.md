@@ -68,6 +68,14 @@
 | `novoard_notify_owner` | `/api/peer/notify` |
 | `novoard_recent_activity` | `/api/activity` |
 | `novoard_tail_logs` | `/api/logs` |
+| `novoard_list_packs` | `GET /api/packs` |
+| `novoard_pack_tools` | `GET /api/packs/tools` |
+| `novoard_install_pack` | `POST /api/packs/<installKey>/install\|update` |
+| `novoard_get_schedule` | `GET /api/schedule` |
+| `novoard_set_schedule` | `PUT /api/schedule` |
+| `novoard_schedule_catch_up` | `POST /api/schedule/catch-up` |
+
+本机会话的项目 skill 写在 `src/novoard-skill.mjs`，启动时落到 `<agentHome>/.codebuddy/skills/novoard-agent-ops/`（2026-11-12 起由 `novoard-agent` 改名，旧目录启动时删除）。能力包的删除和 Git 凭据不开放给会话，只在控制台操作。
 
 注意 `novoard_get_settings` 与 `novoard_save_settings` 也存在，分别走 `GET`/`PUT /api/settings`。
 

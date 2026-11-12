@@ -3,7 +3,7 @@
  * 不把 SDK 打进 SEA：CLI 在磁盘上的 node_modules 里，必须用系统 Node 跑这个文件。
  */
 import { createInterface } from "node:readline";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,7 +19,7 @@ import { explainAgentError, normalizeSdkMessage } from "./chat-events.mjs";
 import { dispatchNovoardTool } from "./novoard-tools.mjs";
 import { createAskGate, formatAnswers, normalizeQuestions } from "./ask-user.mjs";
 import { codebuddySessionFields } from "./codebuddy-config.mjs";
-import { NOVOARD_SKILL } from "./novoard-skill.mjs";
+import { NOVOARD_SKILL, NOVOARD_SKILL_NAME, NOVOARD_SKILL_LEGACY_NAMES } from "./novoard-skill.mjs";
 import { edition } from "./edition.mjs";
 
 const origin = process.env.NOVOARD_LOCAL_ORIGIN || "";
@@ -30,8 +30,10 @@ if (!sessionDir || !agentHome) {
   process.exit(1);
 }
 
-mkdirSync(join(agentHome, ".codebuddy", "skills", "novoard-agent"), { recursive: true });
-writeFileSync(join(agentHome, ".codebuddy", "skills", "novoard-agent", "SKILL.md"), NOVOARD_SKILL);
+const skillsDir = join(agentHome, ".codebuddy", "skills");
+for (const legacy of NOVOARD_SKILL_LEGACY_NAMES) rmSync(join(skillsDir, legacy), { recursive: true, force: true });
+mkdirSync(join(skillsDir, NOVOARD_SKILL_NAME), { recursive: true });
+writeFileSync(join(skillsDir, NOVOARD_SKILL_NAME, "SKILL.md"), NOVOARD_SKILL);
 
 const store = createSessionStore(sessionDir);
 const live = new Map();
@@ -117,9 +119,15 @@ function sessionOptions(sdk, holder) {
       "mcp__novoard__novoard_notify_owner",
       "mcp__novoard__novoard_recent_activity",
       "mcp__novoard__novoard_tail_logs",
+      "mcp__novoard__novoard_list_packs",
+      "mcp__novoard__novoard_pack_tools",
+      "mcp__novoard__novoard_install_pack",
+      "mcp__novoard__novoard_get_schedule",
+      "mcp__novoard__novoard_set_schedule",
+      "mcp__novoard__novoard_schedule_catch_up",
     ],
     systemPrompt: {
-      append: `你是这台电脑上的 ${edition.productName}。配置和执行遵循项目 skill novoard-agent。执行 Target 必须走 novoard_run_target，也就是本机 A2A。`,
+      append: `你是这台电脑上的 ${edition.productName}。配置、能力包、定时和执行遵循项目 skill ${NOVOARD_SKILL_NAME}。执行 Target 必须走 novoard_run_target，也就是本机 A2A。`,
     },
     env: sessionEnv(),
     stderr: (chunk) => process.stderr.write(String(chunk)),
@@ -168,6 +176,19 @@ function toolDefs(sdk) {
     }],
     ["novoard_recent_activity", "读取最近的本机执行审计", {}],
     ["novoard_tail_logs", "读取最近的本机日志", {}],
+    ["novoard_list_packs", "列出本机已装能力包和 Hub 下发但还没装的来源（含版本、依赖、凭据状态）", {}],
+    ["novoard_pack_tools", "读取已装能力包的工具清单和参数定义，写 uses 步骤前先查", {
+      pack: z.string().optional().describe("只看这个包，省略则返回全部"),
+    }],
+    ["novoard_install_pack", "安装未装的来源或更新已装的包，完成后返回结果", {
+      key: z.string().describe("novoard_list_packs 返回的 installKey：已装的是包名，未装来源是 src-…"),
+      action: z.enum(["install", "update"]).optional().describe("默认 install"),
+    }],
+    ["novoard_get_schedule", "读取定时总开关、时区，以及每个定时 Target 的下次运行时间和上次结果", {}],
+    ["novoard_set_schedule", "打开或关闭定时总开关，影响本机全部定时 Target，先征得用户同意", {
+      enabled: z.boolean().describe("true 打开，false 关闭"),
+    }],
+    ["novoard_schedule_catch_up", "立即补跑今天错过的定时 Target", {}],
   ];
   return spec.map(([name, description, shape]) => sdk.tool(name, description, shape, async (args) => {
     try {
