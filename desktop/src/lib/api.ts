@@ -42,10 +42,15 @@ export type ScheduleInfo = { enabled: boolean; timezone: string };
 export type TargetStep =
   | { script: string; cwd?: string; env?: Record<string, string> }
   | { openApp: string }
-  | { openPath: string };
+  | { openPath: string }
+  | { template: string }
+  | { uses: string; with?: Record<string, string | number | boolean | string[]>; cwd?: string; retry?: number; retryInterval?: string };
 
 export type TargetDef = {
   title: string;
+  schedule?: string;
+  oncePerDay?: boolean;
+  deadline?: string;
   steps?: TargetStep[];
   template?: string;
   vars?: Record<string, string | number | boolean>;
@@ -149,6 +154,39 @@ export type PackEntry = {
 
 export function listPacks(base: string) {
   return request<{ ok: boolean; packs: PackEntry[] }>(base, "/api/packs");
+}
+
+/** 能力包工具参数（ADR-0019 §1）。label/description/format 为表单展示用，可缺省。 */
+export type ToolParam = {
+  name: string;
+  type: "string" | "number" | "boolean" | "string[]" | "enum";
+  required?: boolean;
+  default?: string | number | boolean | string[];
+  enum?: string[];
+  label?: string;
+  description?: string;
+  format?: "path" | "duration" | "time";
+};
+
+export type PackTool = {
+  id: string;
+  displayName: string;
+  description?: string;
+  remoteWrite: boolean;
+  platforms?: string[];
+  params: ToolParam[];
+};
+
+export type PackTools = {
+  ok: boolean;
+  platform: string;
+  timezone: string;
+  scheduleEnabled: boolean;
+  packs: Array<{ id: string; displayName: string; tools: PackTool[] }>;
+};
+
+export function listPackTools(base: string) {
+  return request<PackTools>(base, "/api/packs/tools");
 }
 
 export function listGitCredentials(base: string) {

@@ -105,7 +105,7 @@ export function handleDesktopCors(req, res) {
   return false;
 }
 
-export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile, packManager = null, gitAuth = null, diagnoseTarget = null, schedule = null } = {}) {
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile, packManager = null, packRegistry = null, gitAuth = null, diagnoseTarget = null, schedule = null } = {}) {
   const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
@@ -504,6 +504,34 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       if (!packManager) return json(res, 404, { ok: false, reason: "能力包管理未装配" });
       packManager.list().then((packs) => json(res, 200, { ok: true, packs })).catch((error) => json(res, 500, { ok: false, reason: error.message }));
       return;
+    }
+    // Target 表单的数据源（PRD-7 A9）：本机已装包的工具清单 + 平台 + 定时时区与总开关
+    if (url.pathname === "/api/packs/tools" && req.method === "GET") {
+      const sched = schedule?.status?.() ?? null;
+      const packs = (packRegistry?.list?.() ?? []).sort().flatMap((id) => {
+        const pack = packRegistry.get(id);
+        if (!pack.ok) return [];
+        const m = pack.manifest;
+        return [{
+          id,
+          displayName: m.displayName ?? id,
+          tools: m.tools.map((t) => ({
+            id: t.id,
+            displayName: t.displayName ?? t.id,
+            ...(t.description ? { description: t.description } : {}),
+            remoteWrite: t.remoteWrite === true,
+            ...(Array.isArray(t.platforms) && t.platforms.length ? { platforms: t.platforms } : {}),
+            params: Array.isArray(t.params) ? t.params : [],
+          })),
+        }];
+      });
+      return json(res, 200, {
+        ok: true,
+        platform: process.platform,
+        timezone: sched?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+        scheduleEnabled: sched?.enabled ?? false,
+        packs,
+      });
     }
     const packOp = url.pathname.match(/^\/api\/packs\/([A-Za-z][A-Za-z0-9-]*)(?:\/(install|update))?$/); // id 为包名，或未装来源的 src-<key>
     if (packOp && ((req.method === "POST" && packOp[2]) || (req.method === "DELETE" && !packOp[2]))) {

@@ -43,6 +43,7 @@
 - `runtime`（新增，可选）：`python`（缺省，兼容 OSGToolset）或 `node`。
 - `platforms`（新增，可选）：缺省视为全平台。
 - params 的类型与校验规则沿用 cronkit `validate.ts`。
+- params 可选展示字段（2026-11-12 修订）：`label` 是表单上显示的名字，缺省用 `name`；`description` 是说明；`format` 取 `path`（带目录选择，相对工程根）、`duration`（如 `10m`）、`time`（如 `08:00`）。这三项只影响 agent 桌面端的 Target 表单，不参与校验和调用。
 
 ### 2. 调用
 

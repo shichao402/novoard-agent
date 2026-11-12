@@ -20,6 +20,7 @@
 | A6 | 缺包诊断与预检 | A2、A5 | 新 `src/packs/diagnose.mjs`、`card.mjs`、`targets-store.mjs` |
 | A7 | 控制台 | A2、A5、A6 | `src/console-ui.mjs` 及前端 |
 | A8 | 契约 v2.5：来源自发现包名、本机 Git 凭据 | A5、A7；Hub H5 | `src/packs/`、`src/local-a2a.mjs`、桌面设置页与能力包页 |
+| A9 | Target 表单化、保存不丢字段、manifest 展示字段 | A8 | `desktop/src/pages/targets-page.tsx`、`desktop/src/lib/target-draft.mjs`、`cron.mjs` |
 
 ## A1 同步契约 v2.4
 
@@ -252,6 +253,38 @@ A6、A7 已实现，配套的 novoard-packs P4–P5、OSGToolset O2–O3 也一�
 - `test/packs-git-auth.test.mjs`：前缀规范化、最长匹配（ssh 不命中）、0600 存储与脱敏、git 环境注入、控制台接口与跨源拒绝。
 - `test/packs-manager.test.mjs`：clone 后自动发现包名、v1 缓存丢弃旧 id、包名覆盖与冲突、目录改名对齐、凭据注入、控制台 API。
 - 手工：对 GitHub 私有仓用假 token 调 git，返回 128（认证失败）而不是弹出交互提示，说明认证头确实发出、本机 helper 已被屏蔽。
+
+## A9 Target 表单（2026-11-12）
+
+起因：Target 页只能编辑一条命令，定时和 uses 步骤要手写 YAML；而且保存时会丢掉 schedule、oncePerDay、deadline 和 uses 步骤。
+
+### 表单
+
+- 步骤：按顺序列出，可增删和上下移动。类型可选能力包工具、命令、打开应用、打开文件或目录；模板步骤只读，可调整顺序或删除。
+- 能力包工具：先选包再选工具，选项里标出「写远端」和平台限制。参数表单按工具清单生成：enum 用下拉，boolean 用开关，string[] 逐行增删，`format: path` 带目录选择，`time` 用时间控件，`duration` 有格式提示。必填项标星，缺省值作为占位显示，不写进定义。高级设置里有工程根（cwd）、重试次数（0–10）、重试间隔。
+- 本机没装的包：保留已有参数原样保存，并提示装上后才能编辑。
+- 定时：重复方式可选不定时、每天、每周、每小时、按分钟间隔、自定义 cron；显示中文描述和接下来三次运行时间（带时区）。可设「每天只跑一次」和硬截止。总开关关着时给出提示。
+- 整个 target 直接引用模板时，显示提示和「改为自己的步骤」按钮。
+
+### 保存
+
+- 以上次的定义为底，只覆盖表单管理的字段，vars、命令步骤的 env 等没有控件的字段原样保留。
+- 关掉定时时，schedule、oncePerDay、deadline 一并去掉；oncePerDay 只在为 false 时写出。
+- 保存前逐个 target 校验并在页内列出问题：ID、标题、步骤为空、未选工具、必填参数、数字参数、时长和时间格式、cron 有效性、重试范围。会写远端的工具要求打开「执行前需要在 Hub 上确认」。找不到的工具不拦截，交给 A6 诊断。
+
+### 接口
+
+- `GET /api/packs/tools`：返回 `{ ok, platform, timezone, scheduleEnabled, packs: [{ id, displayName, tools: [{ id, displayName, description?, remoteWrite, platforms?, params }] }] }`。只列能读出清单的已装包，按包名排序。
+
+### 清单展示字段
+
+- ADR-0019 §1 增加可选的 `label`、`description`、`format`。novoard-packs 两个包、OSGToolset 已补齐。
+- 发现：novoard-packs 里 svn、git、unity-warmup 的 `path` 参数沿用自 cronkit（当时用来切换到 target 下的子目录），但现在的工具并不读取它。本次只如实标为「子路径（暂不生效）」，不给目录选择；是删除还是恢复其作用，另行决定。
+
+### 验收
+
+- `test/target-form.test.mjs`：cron 解析生成往返、有效性与时区下次运行、toDef 往返不丢字段、关掉定时、模板 target、cleanWith、参数与格式校验、未装包不拦截、ID 重复、`/api/packs/tools`。
+- novoard-packs `tests/manifest.test.ts`：与 cronkit 比较时忽略展示字段；每个参数都有 label，时长和时间参数带对应 format。
 
 ## 不在范围
 

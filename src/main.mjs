@@ -273,6 +273,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
       },
     },
     packManager,
+    packRegistry: packs,
     gitAuth,
     diagnoseTarget: (target) => diagnoser.diagnoseTarget(target),
     schedule: {
