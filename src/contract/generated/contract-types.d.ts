@@ -82,9 +82,10 @@ export type FrameAgentHelloAck = {
   "inFlightTaskIds": string[];
   /** hub 侧契约版本，便于 agent 记录双方版本（契约 §8 可观测性） */
   "hubVersion"?: string;
-  /** 能力包来源清单（契约 v2.4）：agent 包管理器据此拉取能力包；缺省表示 hub 未下发 */
+  /** 能力包来源清单（契约 v2.4；v2.5 起 id 可选）：agent 包管理器据此拉取能力包；缺省表示 hub 未下发 */
   "packSources"?: {
-    "id": string;
+    /** 包名覆盖（v2.5 起可选）：缺省时 agent 安装后从包根 toolset.json 的 id 自动发现包名 */
+    "id"?: string;
     "git": string;
     "branch": string;
     /** 包根在仓库内的相对路径，缺省为仓库根 */

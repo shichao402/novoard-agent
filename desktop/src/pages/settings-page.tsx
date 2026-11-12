@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import { GitCredentialsSection } from "@/components/git-credentials-section";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -187,6 +188,7 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
         <Button variant="accent" disabled={busy} onClick={() => void saveModel()}>保存模型配置</Button>
         {modelStatus ? <p className={`text-xs leading-5 ${modelTone === "ok" ? "text-good" : modelTone === "err" ? "text-bad" : "text-muted"}`}>{modelStatus}</p> : null}
       </section>
+      <GitCredentialsSection base={base} />
       <section className="flex items-center justify-between rounded-2xl border border-line bg-panel px-5 py-4">
         <div>
           <h2 className="text-sm font-medium">登录时启动</h2>

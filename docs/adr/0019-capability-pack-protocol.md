@@ -1,7 +1,7 @@
 # ADR-0019: 能力包协议
 
 - 状态：Accepted
-- 日期：2026-11-09
+- 日期：2026-11-09（2026-11-11 修订 §8、§9）
 - 讨论来源：Hub ADR-0012（cronkit 被 novoard-agent 吸收）。领域工具外置为能力包后，需要一份包作者照着就能实现的协议
 
 ## Context
@@ -93,8 +93,21 @@ stdout 中能解析成 JSON 且 `type` 为 `"progress"` 的行视为进度，其
 - node 包：必须提交打包好的 entry，没有依赖安装步骤，不需要 `.deps-ok`。
 - 运行时只检查，不安装。
 
+### 8. 来源与包名（2026-11-11 修订，契约 v2.5）
+
+- 能力包一律从 git 拉取，仓库默认按公开仓处理。
+- 来源由 `git + branch + subdir` 唯一确定。包名取包根 `toolset.json` 的 `id`；Hub 可以为某个来源指定包名覆盖，用于同一个包需要并装多份的情况。
+- 两个来源得到同一个包名时，后装的报 `pack-name-conflict`，不覆盖已装的包。
+
+### 9. 私有仓认证（2026-11-11 修订）
+
+- 凭据只存在 agent 本机，不经过 Hub，按仓库地址前缀匹配（可以精确到组织或单个仓库）。
+- 内核调 git 时不读本机 credential helper，也不允许交互提示；命中凭据时只给这一次调用注入 HTTP 认证头。这样包管理的行为不受本机 git 环境影响。
+- 存储方式与接口见 [PRD-7](../prd/prd-7-schedule-and-capability-packs.md) A8。
+
 ## Consequences
 
 - 每个 step 多起一个进程，相对分钟级的 svn、Unity 操作可以忽略。
 - 能力包可以用任何语言实现，只要遵守本协议。
-- 实现见 [PRD-7](../prd/prd-7-schedule-and-capability-packs.md) A4、A5。
+- 包作者改 toolset.json 的 id 会导致本机目录改名，引用旧包名的 target 需要同步修改。
+- 实现见 [PRD-7](../prd/prd-7-schedule-and-capability-packs.md) A4、A5、A8。

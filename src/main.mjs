@@ -13,6 +13,7 @@ import { loadTargets, expandSteps, deriveCard, validateUsesSteps } from "./card.
 import { createPackRegistry } from "./packs/registry.mjs";
 import { createPackManager } from "./packs/manager.mjs";
 import { createSourcesCache, packSourcesPath } from "./packs/sources-cache.mjs";
+import { createGitAuth, gitCredentialsPath } from "./packs/git-auth.mjs";
 import { createDiagnoser, createGitCheck, formatProblems } from "./packs/diagnose.mjs";
 import { createScheduler, systemTimezone } from "./scheduler.mjs";
 import { createScheduleState, scheduleStatePath } from "./schedule-state.mjs";
@@ -79,18 +80,23 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   // 能力包（ADR-0019）：<stateDir>/packs/<id>/；NOVOARD_PACKS_DIR 可覆盖（测试与本机调试用）
   const packs = createPackRegistry({ packsDir: env.NOVOARD_PACKS_DIR || join(state, "packs") });
   const packSources = createSourcesCache({ file: packSourcesPath(state), log });
+  // 私有仓凭据只在本机（PRD-7 A8）：<stateDir>/git-credentials.json，按 URL 前缀匹配
+  const gitAuth = createGitAuth({ file: gitCredentialsPath(state), log });
   // 包管理（PRD-7 A5）：安装/更新/删除结束（成功或失败）都重派生 Card 并发 card.update
   const packManager = createPackManager({
     registry: packs,
     sources: packSources,
+    gitAuth,
     log,
     env,
     onChange: ({ id, result }) => refreshCard(`能力包 ${id} ${result.ok ? "已变更" : `操作失败：${result.reason}`}`),
   });
+  // 已装包目录名与来源包名对齐（旧版人填的 id → toolset.json 的 id）；此时 Card 还没派生，不发通知
+  packManager.reconcile({ notify: false });
   const usesErrors = validateUsesSteps(expanded.targets, packs);
   if (usesErrors.length > 0) throw new Error(`targets 校验失败：${usesErrors.join("; ")}`);
   // 诊断（PRD-7 A6）：现在跑会失败的 target 不进 Card；磁贴标红；定时前 60 分钟预检
-  const diagnoser = createDiagnoser({ registry: packs, sources: packSources, gitAvailable: createGitCheck({ env }) });
+  const diagnoser = createDiagnoser({ registry: packs, canProvide: (id) => packManager.canProvide(id), gitAvailable: createGitCheck({ env }) });
   const profileRef = { current: loadProfile(dir) };
   const card = deriveCard({ agentId: config.agentId, targets: loaded.targets, agentDir: dir, profile: profileRef.current, unavailable: diagnoser.unavailable(expanded.targets) });
   /** editor 保存后 card 热更新（tunnel 上报用新 card；hello 重连也带最新） */
@@ -170,6 +176,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     onPackSources: (list) => {
       const r = packSources.replace(list);
       log.info?.(`[packs] 已缓存 hub 下发的能力包来源 ${r.count} 条`);
+      packManager.reconcile();
     },
   });
   peer = createPeerTalk({
@@ -266,6 +273,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
       },
     },
     packManager,
+    gitAuth,
     diagnoseTarget: (target) => diagnoser.diagnoseTarget(target),
     schedule: {
       status: () => scheduleRef.current?.status() ?? null,
@@ -335,7 +343,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     await localA2A.close();
   }
 
-  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, scheduler, packs, packManager, packSources, diagnoser, stop, agentDir: dir };
+  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, scheduler, packs, packManager, packSources, gitAuth, diagnoser, stop, agentDir: dir };
 }
 
 function resolveTimezone(configured, log) {

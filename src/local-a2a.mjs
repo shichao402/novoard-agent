@@ -105,7 +105,7 @@ export function handleDesktopCors(req, res) {
   return false;
 }
 
-export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile, packManager = null, diagnoseTarget = null, schedule = null } = {}) {
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile, packManager = null, gitAuth = null, diagnoseTarget = null, schedule = null } = {}) {
   const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
@@ -505,7 +505,7 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       packManager.list().then((packs) => json(res, 200, { ok: true, packs })).catch((error) => json(res, 500, { ok: false, reason: error.message }));
       return;
     }
-    const packOp = url.pathname.match(/^\/api\/packs\/([A-Za-z][A-Za-z0-9-]*)(?:\/(install|update))?$/);
+    const packOp = url.pathname.match(/^\/api\/packs\/([A-Za-z][A-Za-z0-9-]*)(?:\/(install|update))?$/); // id 为包名，或未装来源的 src-<key>
     if (packOp && ((req.method === "POST" && packOp[2]) || (req.method === "DELETE" && !packOp[2]))) {
       if (!packManager) return json(res, 404, { ok: false, reason: "能力包管理未装配" });
       if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
@@ -513,8 +513,37 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       const op = req.method === "DELETE" ? packManager.remove(id) : action === "install" ? packManager.install(id) : packManager.update(id);
       op.then((r) => {
         audit?.({ lane: "local", target: `pack:${id}`, outcome: r.ok ? "completed" : "failed", detail: { via: "console", action: action ?? "remove", ...(r.ok ? { version: r.version ?? null } : { code: r.code, reason: r.reason }) } });
-        json(res, r.ok ? 200 : r.code === "source-unknown" ? 404 : 422, r);
+        json(res, r.ok ? 200 : r.code === "source-unknown" ? 404 : r.code === "pack-name-conflict" ? 409 : 422, r);
       }).catch((error) => json(res, 500, { ok: false, reason: error.message }));
+      return;
+    }
+    // 能力包仓库的 git 凭据（PRD-7 A8）：只存本机，列表只给 url、用户名、token 末四位
+    if (url.pathname === "/api/git-credentials") {
+      if (!gitAuth) return json(res, 404, { ok: false, reason: "git 凭据未装配" });
+      if (req.method === "GET") return json(res, 200, { ok: true, credentials: gitAuth.list() });
+      if (req.method !== "PUT" && req.method !== "DELETE") return json(res, 405, { ok: false, reason: "不支持的方法" });
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      if (req.method === "DELETE") {
+        try {
+          const target = url.searchParams.get("url") ?? "";
+          const removed = gitAuth.remove(target);
+          audit?.({ lane: "local", target: "git-credentials", outcome: "completed", detail: { via: "console", action: "remove", url: target, removed } });
+          json(res, 200, { ok: true, removed });
+        } catch (error) {
+          json(res, 400, { ok: false, reason: error.message });
+        }
+        return;
+      }
+      readJsonBody(req).then((body) => {
+        if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+        try {
+          const saved = gitAuth.upsert(body.data ?? {});
+          audit?.({ lane: "local", target: "git-credentials", outcome: "completed", detail: { via: "console", action: "save", url: saved.url, username: saved.username } });
+          json(res, 200, { ok: true, credential: saved });
+        } catch (error) {
+          json(res, 400, { ok: false, reason: error.message });
+        }
+      });
       return;
     }
     if (req.method === "PUT" && url.pathname === "/api/profile") {

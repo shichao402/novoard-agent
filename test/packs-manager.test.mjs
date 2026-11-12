@@ -53,29 +53,40 @@ function setup({ withSource = true } = {}) {
   const state = tmp();
   const registry = createPackRegistry({ packsDir: join(state, "packs") });
   const sources = createSourcesCache({ file: join(state, "pack-sources.json"), log: quiet });
-  if (withSource) sources.replace([{ id: "demo", git: src.bare, branch: "main", subdir: "packs/demo" }]);
+  if (withSource) sources.replace([{ git: src.bare, branch: "main", subdir: "packs/demo" }]);
   const changes = [];
   const manager = createPackManager({ registry, sources, log: quiet, onChange: (c) => changes.push(c) });
   return { src, state, registry, sources, manager, changes };
 }
 
-test("来源缓存：替换后落盘、重开可读；不合法条目丢弃；空数组清空", () => {
+test("来源缓存：替换后落盘、重开可读；不合法/重复条目丢弃；空数组清空；v1 缓存丢弃旧 id", () => {
   const dir = tmp();
   const file = join(dir, "pack-sources.json");
   const a = createSourcesCache({ file, log: quiet });
   const r = a.replace([
-    { id: "osg", git: "https://git.example/osg.git", branch: "main", subdir: "./tools/" },
+    { git: "https://git.example/osg.git", branch: "main", subdir: "./tools/" },
+    { git: "https://GIT.example/osg", branch: "main", subdir: "tools" },
     { id: "1bad", git: "x", branch: "main" },
-    { id: "evil", git: "x", branch: "main", subdir: "../up" },
+    { git: "x", branch: "main", subdir: "../up" },
+    { id: "vc", git: "https://git.example/packs.git", branch: "main" },
+    { id: "vc", git: "https://git.example/packs.git", branch: "dev" },
   ]);
-  assert.deepEqual(r, { count: 1, dropped: 2 });
+  assert.deepEqual(r, { count: 2, dropped: 4 });
   if (process.platform !== "win32") assert.equal(statSync(file).mode & 0o777, 0o600);
   const b = createSourcesCache({ file, log: quiet });
-  assert.deepEqual(b.get("osg"), { id: "osg", git: "https://git.example/osg.git", branch: "main", subdir: "tools" });
+  const key = normalizeSource({ git: "https://git.example/osg.git", branch: "main", subdir: "tools" }).key;
+  assert.match(key, /^src-[0-9a-f]{12}$/);
+  assert.deepEqual(b.get(key), { key, git: "https://git.example/osg.git", branch: "main", subdir: "tools" });
+  assert.equal(b.byOverride("vc")?.branch, "main");
   b.replace([]);
   assert.deepEqual(createSourcesCache({ file, log: quiet }).list(), []);
-  assert.equal(normalizeSource({ id: "x", git: "g", branch: "-x" }), null);
-  assert.equal(normalizeSource({ id: "x", git: "g", branch: "main", subdir: "." }).subdir, undefined);
+  assert.equal(normalizeSource({ git: "g", branch: "-x" }), null);
+  assert.equal(normalizeSource({ git: "g", branch: "main", subdir: "." }).subdir, undefined);
+
+  writeFileSync(file, JSON.stringify({ schemaVersion: 1, sources: [{ id: "default", git: "https://git.example/packs.git", branch: "main" }] }));
+  const legacy = createSourcesCache({ file, log: quiet }).list();
+  assert.equal(legacy.length, 1);
+  assert.equal(legacy[0].id, undefined, "v1 的人填 id 不当覆盖名");
 });
 
 test("hello.ack 带 packSources 时缓存；缺省时保留旧缓存", async () => {
@@ -95,13 +106,14 @@ test("hello.ack 带 packSources 时缓存；缺省时保留旧缓存", async () 
     client.close();
     await hub.close?.();
   };
-  await connect([{ id: "osg", git: "https://git.example/osg.git", branch: "main" }]);
-  assert.equal(cache.get("osg")?.git, "https://git.example/osg.git");
+  await connect([{ git: "https://git.example/osg.git", branch: "main" }, { id: "vc", git: "https://git.example/packs.git", branch: "main" }]);
+  assert.equal(cache.list().length, 2);
+  assert.equal(cache.byOverride("vc")?.git, "https://git.example/packs.git");
   await connect(undefined);
-  assert.equal(createSourcesCache({ file: cache.file, log: quiet }).get("osg")?.branch, "main");
+  assert.equal(createSourcesCache({ file: cache.file, log: quiet }).byOverride("vc")?.branch, "main");
 });
 
-test("安装：clone 到 packs/<id>，包根取 subdir，记版本并通知变更", async () => {
+test("安装：按包名找来源，clone 后从 toolset.json 自动发现包名，包根取 subdir，记版本并通知变更", async () => {
   const { registry, manager, changes, src } = setup();
   const r = await manager.install("demo");
   assert.equal(r.ok, true, r.reason);
@@ -110,6 +122,7 @@ test("安装：clone 到 packs/<id>，包根取 subdir，记版本并通知变�
   assert.equal(pack.ok, true, pack.reason);
   assert.ok(pack.root.endsWith(join("demo", "packs", "demo")));
   assert.deepEqual(registry.list(), ["demo"]);
+  assert.equal(registry.metaOf("demo").sourceKey, normalizeSource({ git: src.bare, branch: "main", subdir: "packs/demo" }).key);
   assert.equal(changes.length, 1);
   assert.equal(changes[0].result.ok, true);
   const [entry] = await manager.list();
@@ -147,9 +160,10 @@ test("来源未知、clone 失败、删除", async () => {
   const { manager, registry, sources, changes } = setup({ withSource: false });
   const unknown = await manager.install("demo");
   assert.equal(unknown.code, "source-unknown");
-  sources.replace([{ id: "demo", git: join(tmp(), "nope.git"), branch: "main" }]);
+  sources.replace([{ git: join(tmp(), "nope.git"), branch: "main" }]);
   const bad = await manager.install("demo");
   assert.equal(bad.code, "git-failed");
+  assert.match(bad.reason, /没有找到提供 demo 的来源/);
   assert.equal(existsSync(registry.cloneDirOf("demo")), false);
   assert.deepEqual(readdirSync(registry.packsDir).filter((n) => n.startsWith(".tmp-")), []);
   assert.equal(changes.length, 2, "失败也要通知变更");
@@ -236,20 +250,92 @@ test("控制台 API：GET /api/packs 列出，POST install/update，DELETE 删�
   const base = `http://127.0.0.1:${port}`;
   try {
     let body = await (await fetch(`${base}/api/packs`)).json();
-    assert.deepEqual(body.packs.map((p) => [p.id, p.installed]), [["demo", false]]);
-    const denied = await fetch(`${base}/api/packs/demo/install`, { method: "POST", headers: { Origin: "https://evil.example" } });
+    assert.deepEqual(body.packs.map((p) => [p.id, p.installed]), [[null, false]], "未装来源包名待自动发现");
+    const sourceKey = body.packs[0].sourceKey;
+    const denied = await fetch(`${base}/api/packs/${sourceKey}/install`, { method: "POST", headers: { Origin: "https://evil.example" } });
     assert.equal(denied.status, 403);
-    const installed = await fetch(`${base}/api/packs/demo/install`, { method: "POST" });
+    const installed = await fetch(`${base}/api/packs/${sourceKey}/install`, { method: "POST" });
     assert.equal(installed.status, 200);
     assert.equal((await installed.json()).ok, true);
     body = await (await fetch(`${base}/api/packs`)).json();
-    assert.equal(body.packs[0].installed, true);
+    assert.deepEqual(body.packs.map((p) => [p.id, p.installed, p.sourceKey]), [["demo", true, sourceKey]]);
     assert.equal((await fetch(`${base}/api/packs/demo/update`, { method: "POST" })).status, 200);
     assert.equal((await fetch(`${base}/api/packs/nope/install`, { method: "POST" })).status, 404);
     const del = await (await fetch(`${base}/api/packs/demo`, { method: "DELETE" })).json();
     assert.equal(del.removed, true);
-    assert.deepEqual(audits.map((a) => `${a.target}:${a.detail.action}:${a.outcome}`), ["pack:demo:install:completed", "pack:demo:update:completed", "pack:nope:install:failed", "pack:demo:remove:completed"]);
+    assert.deepEqual(audits.map((a) => `${a.target}:${a.detail.action}:${a.outcome}`), [`pack:${sourceKey}:install:completed`, "pack:demo:update:completed", "pack:nope:install:failed", "pack:demo:remove:completed"]);
   } finally {
     await local.close();
   }
+});
+
+test("包名覆盖：同一个包从两个分支并装；不填覆盖时第二个来源报重名冲突", async () => {
+  const { src, registry, sources, manager } = setup({ withSource: false });
+  sh(src.work, "checkout", "-q", "-b", "dev");
+  sh(src.work, "push", "-q", "origin", "dev");
+  const main = { git: src.bare, branch: "main", subdir: "packs/demo" };
+  const dev = { git: src.bare, branch: "dev", subdir: "packs/demo" };
+  sources.replace([main, dev]);
+  const keys = [main, dev].map((s) => normalizeSource(s).key);
+  const first = await manager.install(keys[0]);
+  assert.equal(first.ok, true, first.reason);
+  const second = await manager.install(keys[1]);
+  assert.equal(second.code, "pack-name-conflict");
+  assert.match(second.reason, /包名覆盖/);
+  const listed = await manager.list();
+  assert.equal(listed.find((p) => p.sourceKey === keys[1])?.problemCode, "pack-name-conflict");
+  assert.deepEqual(readdirSync(registry.packsDir).filter((n) => n.startsWith(".tmp-")), []);
+
+  sources.replace([main, { ...dev, id: "demoDev" }]);
+  assert.equal(manager.canProvide("demoDev"), true);
+  const viaName = await manager.install("demoDev");
+  assert.equal(viaName.ok, true, viaName.reason);
+  assert.deepEqual(registry.list().sort(), ["demo", "demoDev"]);
+  assert.equal(registry.metaOf("demoDev").override, "demoDev");
+  assert.equal(manager.canProvide("nothing"), false, "所有来源都已装，不再有候选");
+});
+
+test("对齐：旧版人填包名（default）的目录改名为 toolset.json 的 id；覆盖名变化时跟随", async () => {
+  const { src, registry, sources, manager } = setup();
+  const packsDir = registry.packsDir;
+  mkdirSync(join(packsDir, ".meta"), { recursive: true });
+  sh(packsDir, "clone", "-q", src.bare, "default");
+  writeFileSync(join(packsDir, ".meta", "default.json"), JSON.stringify({ id: "default", git: src.bare, branch: "main", subdir: "packs/demo" }));
+  assert.deepEqual(registry.list(), ["default"]);
+  assert.deepEqual(manager.reconcile(), [{ from: "default", to: "demo" }]);
+  assert.deepEqual(registry.list(), ["demo"]);
+  assert.equal(registry.get("demo").ok, true);
+  assert.ok(registry.metaOf("demo").sourceKey);
+  assert.equal(manager.needsInstall([{ uses: "demo/hello" }]), false);
+
+  sources.replace([{ git: src.bare, branch: "main", subdir: "packs/demo", id: "demo2" }]);
+  assert.deepEqual(manager.reconcile(), [{ from: "demo", to: "demo2" }]);
+  assert.deepEqual(manager.reconcile(), [], "已对齐时不再改名");
+});
+
+test("git 凭据：私有 HTTPS 来源调用 git 时注入 Authorization 头并清空本机 helper", async () => {
+  const { createGitAuth } = await import("../src/packs/git-auth.mjs");
+  const state = tmp();
+  const gitAuth = createGitAuth({ file: join(state, "git-credentials.json"), log: quiet });
+  gitAuth.upsert({ url: "https://git.example.com/team", token: "secret-token" });
+  const registry = createPackRegistry({ packsDir: join(state, "packs") });
+  const sources = createSourcesCache({ file: join(state, "pack-sources.json"), log: quiet });
+  sources.replace([{ git: "https://git.example.com/team/packs.git", branch: "main" }]);
+  const calls = [];
+  const run = async (command, args, { env }) => {
+    calls.push({ args, env });
+    return { code: 128, stdout: "", stderr: "fatal: Authentication failed" };
+  };
+  const manager = createPackManager({ registry, sources, gitAuth, run, log: quiet, env: { PATH: "/usr/bin" } });
+  const r = await manager.install(sources.list()[0].key);
+  assert.equal(r.code, "git-failed");
+  assert.match(r.reason, /设置 → Git 凭据/);
+  const clone = calls.find((c) => c.args[0] === "clone");
+  assert.equal(clone.env.GIT_CONFIG_KEY_0, "credential.helper");
+  assert.equal(clone.env.GIT_CONFIG_VALUE_0, "");
+  assert.equal(clone.env.GIT_CONFIG_KEY_1, "http.https://git.example.com/team/packs.git.extraHeader");
+  assert.equal(clone.env.GIT_CONFIG_VALUE_1, `Authorization: Basic ${Buffer.from("oauth2:secret-token").toString("base64")}`);
+  assert.equal(clone.env.GIT_TERMINAL_PROMPT, "0");
+  const [entry] = await manager.list();
+  assert.deepEqual(entry.credential, { url: "https://git.example.com/team", username: "oauth2", tokenLastFour: "oken" });
 });

@@ -2,8 +2,8 @@
  * target 诊断（PRD-7 A6）：在真正运行之前判断 uses step 能不能跑，并告诉用户该点哪里。
  * 一共六种 code，全部是 error 级别（会失败的事）：
  *   git-missing          包没装，本机也没有 git，装不了
- *   pack-missing         包没装，Hub 登记了来源，点「安装」即可
- *   source-unknown       包没装，Hub 也没登记来源
+ *   pack-missing         包没装，Hub 登记的来源可能提供它，点「安装」即可
+ *   source-unknown       包没装，Hub 登记的来源都不提供它
  *   deps-not-ready       包装了，但 python 依赖没准备好
  *   tool-missing         包里没有这个工具，或 manifest 读不了 / schemaVersion 高于本机
  *   platform-unsupported 工具不支持本机平台
@@ -34,10 +34,12 @@ export function createGitCheck({ spawn = spawnSync, env = process.env } = {}) {
 
 /**
  * @param registry createPackRegistry 实例
- * @param sources  createSourcesCache 实例（get(id)）
+ * @param canProvide (packId) => boolean：是否有已登记的来源可能提供该包（包管理器 canProvide）
+ * @param sources  兼容旧调用：createSourcesCache 实例，按 byOverride/get 判断
  * @param gitAvailable () => boolean
  */
-export function createDiagnoser({ registry, sources = null, platform = process.platform, gitAvailable = createGitCheck() } = {}) {
+export function createDiagnoser({ registry, canProvide = null, sources = null, platform = process.platform, gitAvailable = createGitCheck() } = {}) {
+  const provides = canProvide ?? ((packId) => Boolean(sources?.byOverride?.(packId) ?? sources?.get?.(packId)));
   function problem(step, uses, code, message, action) {
     return { step, uses, code, level: "error", message, action };
   }
@@ -54,9 +56,9 @@ export function createDiagnoser({ registry, sources = null, platform = process.p
       const pack = registry?.get(packId) ?? { ok: false, code: "pack-missing" };
       if (!pack.ok) {
         if (pack.code === "pack-missing") {
-          const known = Boolean(sources?.get?.(packId));
+          const known = provides(packId);
           if (!known) {
-            out.push(problem(n, s.uses, "source-unknown", `本机未安装能力包 ${packId}，Hub 也没有登记它的来源`, `到 Hub 管理台「能力包来源」页添加 ${packId}，再到本机控制台点「安装」。`));
+            out.push(problem(n, s.uses, "source-unknown", `本机未安装能力包 ${packId}，Hub 登记的来源里也没有它`, `到 Hub 管理台「能力包来源」页添加提供 ${packId} 的仓库，再到本机控制台点「安装」。`));
           } else if (!gitAvailable()) {
             out.push(problem(n, s.uses, "git-missing", `本机未安装能力包 ${packId}，而且找不到 git，无法安装`, "先在本机安装 git，再到本机控制台点「安装」。"));
           } else {

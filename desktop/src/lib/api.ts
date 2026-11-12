@@ -124,20 +124,43 @@ export function catchUpNow(base: string) {
   return request<{ ok: boolean; fired: Array<{ id: string; trigger: string; slot: string }> }>(base, "/api/schedule/catch-up", { method: "POST", body: "{}" });
 }
 
+export type GitCredential = { url: string; username: string; tokenLastFour: string };
+
 export type PackEntry = {
-  id: string;
+  /** 包名；来源还没装过且没有覆盖名时为 null（装上后从 toolset.json 得到）。 */
+  id: string | null;
+  /** 来源 key（src-…），未装的来源用它安装。 */
+  sourceKey: string | null;
   installed: boolean;
   busy: boolean;
-  source: { id: string; git: string; branch: string; subdir?: string } | null;
+  /** source.id 是 Hub 上填的「包名覆盖」，不填表示自动发现。 */
+  source: { key?: string; id?: string; git: string; branch: string; subdir?: string } | null;
   version?: string | null;
   displayName?: string;
   depsReady?: boolean;
   depsReason?: string;
   problem?: string;
+  problemCode?: string;
+  /** 已装、但 Hub 已不再下发其来源。 */
+  orphan?: boolean;
+  /** 本机会给这个仓库用哪条 Git 凭据；null 表示按公开仓访问。 */
+  credential?: GitCredential | null;
 };
 
 export function listPacks(base: string) {
   return request<{ ok: boolean; packs: PackEntry[] }>(base, "/api/packs");
+}
+
+export function listGitCredentials(base: string) {
+  return request<{ ok: boolean; credentials: GitCredential[] }>(base, "/api/git-credentials");
+}
+
+export function saveGitCredential(base: string, input: { url: string; username?: string; token?: string; originalUrl?: string }) {
+  return request<{ ok: boolean; credential: GitCredential }>(base, "/api/git-credentials", { method: "PUT", body: JSON.stringify(input) });
+}
+
+export function removeGitCredential(base: string, url: string) {
+  return request<{ ok: boolean; removed: boolean }>(base, `/api/git-credentials?url=${encodeURIComponent(url)}`, { method: "DELETE" });
 }
 
 export function packAction(base: string, id: string, action: "install" | "update" | "remove") {

@@ -18,12 +18,12 @@
     },
     "packSources": {
       "type": "array",
-      "description": "能力包来源清单（契约 v2.4）：agent 包管理器据此拉取能力包；缺省表示 hub 未下发",
+      "description": "能力包来源清单（契约 v2.4；v2.5 起 id 可选）：agent 包管理器据此拉取能力包；缺省表示 hub 未下发",
       "items": {
         "type": "object",
-        "required": ["id", "git", "branch"],
+        "required": ["git", "branch"],
         "properties": {
-          "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]*$" },
+          "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]*$", "description": "包名覆盖（v2.5 起可选）：缺省时 agent 安装后从包根 toolset.json 的 id 自动发现包名" },
           "git": { "type": "string", "minLength": 1 },
           "branch": { "type": "string", "minLength": 1 },
           "subdir": { "type": "string", "description": "包根在仓库内的相对路径，缺省为仓库根" }

@@ -19,6 +19,7 @@
 | A5 | 包管理 | A4、Hub H4 | 新 `src/packs/manager.mjs` |
 | A6 | 缺包诊断与预检 | A2、A5 | 新 `src/packs/diagnose.mjs`、`card.mjs`、`targets-store.mjs` |
 | A7 | 控制台 | A2、A5、A6 | `src/console-ui.mjs` 及前端 |
+| A8 | 契约 v2.5：来源自发现包名、本机 Git 凭据 | A5、A7；Hub H5 | `src/packs/`、`src/local-a2a.mjs`、桌面设置页与能力包页 |
 
 ## A1 同步契约 v2.4
 
@@ -212,6 +213,45 @@ A6、A7 已实现，配套的 novoard-packs P4–P5、OSGToolset O2–O3 也一�
 - 平台限制（原有行为）：macOS 上 svn-update 会附带「未自动释放占用」，因为只有 win32 才释放占用；Unity 编辑器发现只扫描 Windows 路径。
 - Windows：agent 的 `taskkill /T` 第一次不带 /F，对控制台进程通常无效，所以 O2 的优雅收尾实际只在 POSIX 上生效；Windows 上 3 秒后的 `/F` 强杀照常兜底。Windows 验收按用户要求暂缓。
 - 验收：端到端在 macOS 上用 agent 的 runner 对真实 file:// svn 仓库跑通 versionControl/svn-update，状态 completed，进度显示正常。手机收到预检通知这一条没有实测，只有单测覆盖。
+
+## A8 来源自发现与 Git 凭据（2026-11-11）
+
+配合 Hub PRD-6 H5（契约 v2.5）。包名不再由 Hub 手填，私有仓的认证在本机完成。
+
+### 来源与包名
+
+- `packSources[].id` 可选，含义是包名覆盖。来源按 `git + branch + subdir` 识别，规范化规则与 Hub 相同，本机 key 为 `src-` 加 sha1 前 12 位。
+- 缓存 `pack-sources.json` 升到 schemaVersion 2，写入时不带 key，读取时现算。读到 v1 缓存时丢弃 id。重复来源、重复覆盖名丢弃并计数。
+- 安装：先 clone 到 `packs/.tmp-<key>-*`，读包根 toolset.json 的 id 作为包名（有覆盖名时用覆盖名）。包名不合法报 `manifest-invalid`，同名目录已被其他来源占用报 `pack-name-conflict`，提示去 Hub 填包名覆盖。
+- `.meta/<包名>.json` 增加 `sourceKey`、`override`。
+- 对齐：启动时和每次收到 packSources 后，已装目录名与来源应得的包名不一致时改名；旧 meta 补上 sourceKey。
+- 按包名安装（target 缺包自动补装）：先找覆盖名等于该名的来源，否则依次尝试所有未装且未覆盖的来源。
+- 控制台接口：`POST /api/packs/:ref/install` 的 ref 可以是包名或 `src-<key>`；冲突返回 409。`GET /api/packs` 已装项带 `sourceKey`、`orphan`（Hub 不再下发其来源），未装来源 `id` 为 null 或覆盖名，带 `problem`、`problemCode`（上次安装失败原因），两者都带 `credential`（命中的凭据，脱敏）。
+
+### Git 凭据
+
+- 存在 `<stateDir>/git-credentials.json`，权限 0600，每条 `{url, username, token}`。
+- 匹配：按 URL 路径段做前缀匹配，取最长的那条；末段忽略 `.git`。只接受 http/https，地址里不能带账号。用户名缺省时 github.com 用 `x-access-token`，其他用 `oauth2`。
+- 注入：每次调 git 都用 `GIT_CONFIG_COUNT` 追加 `credential.helper=`（不读本机 helper）；命中凭据时再追加 `http.<仓库地址>.extraHeader=Authorization: Basic …`。同时设 `GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND=ssh -o BatchMode=yes`，认证失败直接报错，不会卡在交互提示上。认证类错误提示去「设置 → Git 凭据」。
+- 接口：`GET /api/git-credentials`（只返回 url、username、tokenLastFour），`PUT /api/git-credentials`（body `{url, username?, token?, originalUrl?}`，编辑时 token 留空沿用原值），`DELETE /api/git-credentials?url=`。写接口校验同源，审计不含 token。
+- 桌面端：设置页新增「Git 凭据」区块，可增删改；能力包页每行显示命中的凭据，没命中显示「按公开仓访问」。
+
+### 能力包页
+
+- 每行一个已装包或一个未装来源。未装来源的包名显示「自动」，用 sourceKey 安装。
+- 安装失败按 problemCode 显示「包名冲突」「toolset.json 有问题」「本机没有 git」「安装失败」，并直接显示原因。
+- Hub 已删除来源的已装包显示「就绪（Hub 已删除来源）」，可以删除。
+
+### 与原计划的偏差
+
+- 凭据原计划放系统钥匙串（macOS Keychain、Windows DPAPI），实际用 0600 文件。理由：agent 是 Node 单进程，没有现成的跨平台钥匙串绑定；agent 自己的 Hub 令牌也放在本机配置文件里，安全边界一致。以后需要时再换。
+- SSH 地址不注入凭据，只保证不卡交互。
+
+### 验收
+
+- `test/packs-git-auth.test.mjs`：前缀规范化、最长匹配（ssh 不命中）、0600 存储与脱敏、git 环境注入、控制台接口与跨源拒绝。
+- `test/packs-manager.test.mjs`：clone 后自动发现包名、v1 缓存丢弃旧 id、包名覆盖与冲突、目录改名对齐、凭据注入、控制台 API。
+- 手工：对 GitHub 私有仓用假 token 调 git，返回 128（认证失败）而不是弹出交互提示，说明认证头确实发出、本机 helper 已被屏蔽。
 
 ## 不在范围
 
