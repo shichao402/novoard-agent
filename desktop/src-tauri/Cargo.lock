@@ -2269,7 +2269,7 @@ dependencies = [
 
 [[package]]
 name = "novoard-agent-desktop"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "log",
  "pbjson",
