@@ -141,10 +141,21 @@ function clampConcurrency(value) {
   return Math.min(32, Math.max(1, number));
 }
 
-function stepToDef(step) {
+/** 与 src/packs/validate.mjs 的 RETIRED_PARAMS 保持一致：包里已删掉、只在旧定义里残留的参数。 */
+export const RETIRED_PARAMS = ["path"];
+
+/** step.with 里工具已不再声明的废弃参数；工具清单未知时返回空（看不到清单就不动）。 */
+export function retiredParams(withValues, tool) {
+  if (!tool) return [];
+  const declared = new Set((tool.params ?? []).map((spec) => spec.name));
+  return RETIRED_PARAMS.filter((name) => !declared.has(name) && Object.prototype.hasOwnProperty.call(withValues ?? {}, name));
+}
+
+function stepToDef(step, tools) {
   switch (step.kind) {
     case "uses": {
       const params = cleanWith(step.with);
+      for (const name of retiredParams(params, tools?.get(step.uses))) delete params[name];
       return {
         uses: step.uses,
         ...(Object.keys(params).length ? { with: params } : {}),
@@ -166,7 +177,7 @@ function stepToDef(step) {
 
 const OPTIONAL_KEYS = ["schedule", "oncePerDay", "deadline", "offlineTtl", "approvalTtl", "template", "steps"];
 
-export function toDef(draft, previous) {
+export function toDef(draft, previous, context = {}) {
   const def = { ...(previous ?? {}) };
   for (const key of OPTIONAL_KEYS) delete def[key];
   Object.assign(def, {
@@ -189,7 +200,7 @@ export function toDef(draft, previous) {
     if (draft.deadline.trim()) def.deadline = draft.deadline.trim();
   }
   if (draft.steps.length === 0 && draft.template) def.template = draft.template;
-  else def.steps = draft.steps.map(stepToDef);
+  else def.steps = draft.steps.map((step) => stepToDef(step, context.tools));
   if (!def.vars) def.vars = {};
   return def;
 }

@@ -3,7 +3,9 @@
  * 五种 step：script（shell）/ openApp / openPath / uses（能力包，契约 v2.4）/ template（装载期已展开）。
  * 插值 {{var}}：触发时 vars > target vars > 模板默认值；无来源即失败（不静默空串）。
  * 任一步失败即 target 失败（终态 failed，携带失败步骤号与 stderr 摘要）。
- * cancel：SIGTERM → 3s 后 SIGKILL；Unix 回收独立进程组，Windows 用 taskkill /T 回收进程树。
+ * cancel：SIGTERM（Windows 为不带 /F 的 taskkill /T）→ 宽限期后强杀整棵进程树；Unix 回收独立进程组。
+ *   uses step 额外往 stdin 写一行 {"type":"cancel"} 并关闭 stdin（ADR-0019 §5）：Windows 上控制台进程
+ *   收不到 SIGTERM，包只能靠这条收尾。宽限期 script/openApp/openPath 为 3 秒，uses 为 10 秒。
  * stop(reason)：同 cancel，但终态记 failed 并带原因（超时、运行窗口硬截止）。
  * uses step（ADR-0019）：进程外调用能力包；stdout 中 {"type":"progress"} 行转为进度；
  *   retry/retryInterval 只对 idempotent !== false 的工具生效。
@@ -15,6 +17,10 @@ import { parseProgressLine, prepareInvocation, readResult, EXIT } from "./packs/
 
 const VAR_RE = /\{\{(\w+)\}\}/g;
 const DEFAULT_RETRY_INTERVAL_MS = 3_000;
+/** 取消后到强杀的宽限期（ADR-0019 §5）。uses 要给包留出结束子进程、svn cleanup、写结果文件的时间。 */
+export const CANCEL_GRACE_MS = { script: 3_000, uses: 10_000 };
+/** 写给 uses 子进程 stdin 的取消指令。 */
+export const CANCEL_LINE = '{"type":"cancel"}\n';
 
 /**
  * script step 的 shell 调用。Windows 与 Node 的 shell:true 一致：
@@ -58,6 +64,7 @@ export function createRunner({
   let canceled = false;
   let failReason = null;
   let forceKillTimer = null;
+  let forceKillPid = null;
   let wakeSleep = null;
 
   async function run(triggerVars = {}) {
@@ -144,6 +151,9 @@ export function createRunner({
         try { onStepEnd({ index: index + 1, exit: 1 }); } catch {}
         return { ok: false, stderr: inv.reason, code: inv.code };
       }
+      if (attempt === 1 && inv.retired?.length) {
+        onOutput("status", `[step ${index + 1}] ${step.uses} 已忽略废弃参数 ${inv.retired.join("、")}（工作目录由工程根决定），在 Agent 里打开这个 Target 保存一次即可移除`);
+      }
       last = await execProcess({
         file: inv.command,
         args: inv.args,
@@ -154,6 +164,7 @@ export function createRunner({
         traceCommand: inv.label,
         lowPriority: inv.tool.lowPriority === true,
         parseProgress: true,
+        cancelViaStdin: true,
         interpret: (code, out) => readResult({ resultJson: inv.resultJson, code, stdout: out.stdout, stderr: out.stderr, tool: inv.tool }),
       });
       if (last.ok || canceled || failReason) break;
@@ -165,7 +176,7 @@ export function createRunner({
     return last;
   }
 
-  function execProcess({ file, args, cwd: workDir, env, index, label, traceCommand, verbatim = false, detachOutput = false, lowPriority = false, parseProgress = false, interpret = null }) {
+  function execProcess({ file, args, cwd: workDir, env, index, label, traceCommand, verbatim = false, detachOutput = false, lowPriority = false, parseProgress = false, cancelViaStdin = false, interpret = null }) {
     return new Promise((resolve) => {
       let settled = false;
       const finish = (value) => {
@@ -246,6 +257,7 @@ export function createRunner({
         lineBuf = "";
         endStep(code ?? 1);
         if (currentChild === child) currentChild = null;
+        settleForceKill(child);
         if (failReason) return finish({ ok: false, state: "failed", stderr: failReason });
         if (canceled) return finish({ ok: false, state: "canceled", stderr: stderr || "canceled" });
         if (interpret) {
@@ -259,8 +271,22 @@ export function createRunner({
         if (code === 0) finish({ ok: true, stdout, stderr });
         else finish({ ok: false, stderr: stderr || `exit ${code}` });
       });
+      child.stdin?.on("error", () => { /* 子进程已退出时写取消指令会 EPIPE，忽略 */ });
+      child.novoardCancelViaStdin = cancelViaStdin;
       currentChild = child;
     });
+  }
+
+  /**
+   * 被取消的子进程退出后：清掉强杀定时器，免得宽限期内 pid 被复用后误杀别的进程。
+   * Unix 上进程组里可能还有没跟着退的孙进程，立即对整组补一刀；Windows 的 pid 已失效，taskkill 也找不到树，不再处理。
+   */
+  function settleForceKill(child) {
+    if (!forceKillTimer || forceKillPid !== child.pid) return;
+    clearTimeout(forceKillTimer);
+    forceKillTimer = null;
+    forceKillPid = null;
+    if (process.platform !== "win32") terminateTree(child.pid, true);
   }
 
   function describeStep(step, index) {
@@ -317,13 +343,17 @@ export function createRunner({
     canceled = true;
     wakeSleep?.();
     if (currentChild?.pid) {
-      const pid = currentChild.pid;
+      const child = currentChild;
+      const pid = child.pid;
+      if (child.novoardCancelViaStdin) sendCancelLine(child);
       terminateTree(pid, false);
       if (!forceKillTimer) {
+        forceKillPid = pid;
         forceKillTimer = setTimeout(() => {
           terminateTree(pid, true);
           forceKillTimer = null;
-        }, 3000);
+          forceKillPid = null;
+        }, child.novoardCancelViaStdin ? CANCEL_GRACE_MS.uses : CANCEL_GRACE_MS.script);
         forceKillTimer.unref?.();
       }
     }
@@ -336,6 +366,15 @@ export function createRunner({
   }
 
   return { run, cancel, stop };
+}
+
+/** 写取消指令并关闭 stdin；子进程不读 stdin 时这一行留在管道缓冲里，无副作用。 */
+function sendCancelLine(child) {
+  const stdin = child.stdin;
+  if (!stdin || stdin.destroyed || stdin.writableEnded) return;
+  try {
+    stdin.end(CANCEL_LINE);
+  } catch { /* 已退出 */ }
 }
 
 function splitUses(uses) {

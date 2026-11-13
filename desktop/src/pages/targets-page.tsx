@@ -84,7 +84,7 @@ export function TargetsPage({ base }: { base: string }) {
       return;
     }
     const targets: Record<string, TargetDef> = {};
-    for (const draft of drafts) targets[draft.id] = toDef(draft, original[draft.id]);
+    for (const draft of drafts) targets[draft.id] = toDef(draft, original[draft.id], context);
     setBusy(true);
     setError("");
     try {

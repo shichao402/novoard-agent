@@ -29,6 +29,21 @@
       ]
     },
     {
+      "id": "graceful",
+      "displayName": "读取消指令",
+      "idempotent": true,
+      "params": [
+        { "name": "mark", "type": "string" },
+        { "name": "pidFile", "type": "string" }
+      ]
+    },
+    {
+      "id": "stubborn",
+      "displayName": "不响应取消",
+      "idempotent": true,
+      "params": [{ "name": "pidFile", "type": "string" }]
+    },
+    {
       "id": "hold",
       "displayName": "独占工作区",
       "idempotent": true,

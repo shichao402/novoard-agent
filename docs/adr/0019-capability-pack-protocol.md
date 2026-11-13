@@ -75,7 +75,13 @@ stdout 中能解析成 JSON 且 `type` 为 `"progress"` 的行视为进度，其
 
 ### 5. 取消
 
-内核沿用 `src/runner.mjs` 现有做法：先发 SIGTERM（Windows 上为 `taskkill /T`），3 秒后强杀整棵进程树。包可以处理 SIGTERM 做收尾，但不能依赖收尾一定执行。
+2026-11-13 修订（原做法是 SIGTERM 后 3 秒强杀，Windows 上控制台进程收不到不带 /F 的 `taskkill /T`，包来不及收尾就被强杀，svn 工作副本因此被锁）：
+
+- 内核取消 uses step 时，往工具进程的 stdin 写一行 `{"type":"cancel"}` 后关闭 stdin，同时照常发 SIGTERM（Windows 上为不带 /F 的 `taskkill /T`）。
+- 宽限期：uses step 10 秒，script、openApp、openPath 3 秒。到期仍未退出则强杀整棵进程树。工具进程提前退出时立即补杀残留的进程组（仅 POSIX）。
+- 包这一侧是可选能力：读 stdin 的包收到取消行与收到 SIGTERM 走同一套中止，结束自己启动的子进程，写 result json（summary「已取消」）并以 130 退出。孙进程不得继承 stdin，避免抢读取消行。不读 stdin 的包行为不变，宽限期后被强杀。
+- 包内的收尾必须在宽限期内完成。versionControl 的 svn 写工作副本命令被中断后补跑一次 `svn cleanup`，限时 6 秒。
+- 代价：运行超时和运行窗口硬截止同样走这条路径，对 uses step 最多晚 10 秒结束。
 
 ### 6. 元数据由内核执行
 

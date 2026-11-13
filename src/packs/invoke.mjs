@@ -65,7 +65,7 @@ export function prepareInvocation({ registry, uses, params, projectRoot, dryRun 
     args.push("--result-json", resultJson);
   }
   if (dryRun && tool.supportsDryRun) args.push("--dry-run");
-  return { ok: true, command, args, cwd: pack.root, tool, pack: ref.packId, resultJson, label: `uses ${uses}` };
+  return { ok: true, command, args, cwd: pack.root, tool, pack: ref.packId, resultJson, label: `uses ${uses}`, retired: checked.retired };
 }
 
 /** stdout 中 {"type":"progress",...} 的行视为进度（ADR-0019 §4），否则返回 null。 */

@@ -3,13 +3,23 @@
  * 差异：去掉 rawArgs（契约 uses step 没有该字段）。
  */
 
+/**
+ * 已从包里删掉的参数（2026-11 cronkit 迁移遗留的 path：工作目录改由 step.cwd 决定）。
+ * 工具没声明时忽略而不报错，老的 targets.yaml 照常加载执行；表单保存时会移除。
+ * 工具自己仍声明同名参数（如 general/release-occupants 的 path）时按正常参数处理。
+ */
+export const RETIRED_PARAMS = new Set(["path"]);
+
 export function validateToolParams(tool, raw) {
   const errors = [];
+  const retired = [];
   const input = { ...(raw ?? {}) };
   const specs = tool.params ?? [];
   const known = new Set(specs.map((s) => s.name));
   for (const key of Object.keys(input)) {
-    if (!known.has(key)) errors.push(`未知参数: ${key}`);
+    if (known.has(key)) continue;
+    if (RETIRED_PARAMS.has(key)) retired.push(key);
+    else errors.push(`未知参数: ${key}`);
   }
   const params = {};
   for (const spec of specs) {
@@ -26,7 +36,7 @@ export function validateToolParams(tool, raw) {
     }
     params[spec.name] = coerced.value;
   }
-  return { params, errors };
+  return { params, errors, retired };
 }
 
 function coerceParam(spec, value) {

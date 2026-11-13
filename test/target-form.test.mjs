@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 
 import { createLocalA2A } from "../src/local-a2a.mjs";
 import { buildCron, describeCron, isValidCron, nextRuns, parseSchedule } from "../desktop/src/lib/cron.mjs";
-import { cleanWith, indexTools, newDraft, newStep, toDef, toDraft, validateDraft, validateDrafts } from "../desktop/src/lib/target-draft.mjs";
+import { cleanWith, indexTools, newDraft, newStep, retiredParams, toDef, toDraft, validateDraft, validateDrafts } from "../desktop/src/lib/target-draft.mjs";
+import { RETIRED_PARAMS, validateToolParams } from "../src/packs/validate.mjs";
 
 test("A9 cron：表单能表示的表达式解析后再生成保持不变", () => {
   for (const cron of ["10 2 * * *", "30 9 * * 1,3,5", "15 * * * *", "*/10 9-18 * * *"]) {
@@ -161,4 +162,30 @@ test("A9 /api/packs/tools：列出已装包的工具清单、平台、时区和�
   } finally {
     await local.close();
   }
+});
+
+test("废弃参数 path：工具没声明时执行期忽略不报错，表单保存时移除；工具仍声明时照常保留", () => {
+  const svn = { params: [{ name: "onConflict", type: "string" }] };
+  const occupants = { params: [{ name: "path", type: "string", required: true }] };
+  const checked = validateToolParams(svn, { path: "sub", onConflict: "revert" });
+  assert.deepEqual(checked.errors, []);
+  assert.deepEqual(checked.retired, ["path"]);
+  assert.deepEqual(checked.params, { onConflict: "revert" });
+  assert.deepEqual(validateToolParams(svn, { bogus: 1 }).errors, ["未知参数: bogus"]);
+  assert.deepEqual(validateToolParams(occupants, { path: "D:/w" }).params, { path: "D:/w" });
+
+  const tools = indexTools([{ id: "vc", displayName: "vc", tools: [{ id: "svn-update", displayName: "u", ...svn }] }, { id: "general", displayName: "g", tools: [{ id: "release-occupants", displayName: "r", ...occupants }] }]);
+  const target = { title: "t", expose: "local", audit: "none", requiresApproval: false, notify: "never", steps: [
+    { uses: "vc/svn-update", with: { path: "sub", onConflict: "revert" } },
+    { uses: "general/release-occupants", with: { path: "D:/w" } },
+    { uses: "missing/x", with: { path: "keep" } },
+  ] };
+  const draft = toDraft("t", target);
+  assert.deepEqual(retiredParams(draft.steps[0].with, tools.get("vc/svn-update")), ["path"]);
+  assert.deepEqual(retiredParams(draft.steps[1].with, tools.get("general/release-occupants")), []);
+  const def = toDef(draft, target, { tools });
+  assert.deepEqual(def.steps[0].with, { onConflict: "revert" });
+  assert.deepEqual(def.steps[1].with, { path: "D:/w" });
+  assert.deepEqual(def.steps[2].with, { path: "keep" }, "本机没装的包看不到清单，参数原样保留");
+  assert.deepEqual([...RETIRED_PARAMS], ["path"]);
 });

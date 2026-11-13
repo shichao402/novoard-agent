@@ -8,7 +8,7 @@ import test from "node:test";
 import { createAgentRuntime } from "../src/agent-runtime.mjs";
 import { createPackRegistry } from "../src/packs/registry.mjs";
 import { createPathLocks, normalizePathKey } from "../src/path-locks.mjs";
-import { createRunner } from "../src/runner.mjs";
+import { CANCEL_GRACE_MS, createRunner } from "../src/runner.mjs";
 
 const PACKS_DIR = join(dirname(fileURLToPath(import.meta.url)), "fixtures-packs");
 const packs = createPackRegistry({ packsDir: PACKS_DIR });
@@ -75,6 +75,55 @@ test("取消 uses step 会回收整棵进程树", { skip: process.platform === "
   for (let i = 0; i < 35 && (alive(self) || alive(child)); i++) await sleep(100);
   assert.equal(alive(self), false, "工具进程仍在");
   assert.equal(alive(child), false, "孙进程仍在");
+});
+
+const waitFile = async (file) => { for (let i = 0; i < 50 && !existsSync(file); i++) await sleep(100); };
+
+test("取消 uses step 时往 stdin 写取消指令，包自行收尾后终态为已取消", async () => {
+  const dir = tmp();
+  const pidFile = join(dir, "pid.json");
+  const mark = join(dir, "mark");
+  const { runner, done } = runSteps([{ uses: "fake/graceful", cwd: dir, with: { mark, pidFile } }]);
+  await waitFile(pidFile);
+  const started = Date.now();
+  runner.cancel();
+  const r = await done;
+  assert.equal(r.state, "canceled");
+  assert.ok(Date.now() - started < 3000, "包应在收到取消指令后自行退出，而不是等强杀");
+  assert.equal(readFileSync(mark, "utf8"), "cleaned");
+});
+
+test("不响应取消的 uses 包在 10 秒宽限期后被强杀", { skip: process.platform === "win32" && "Windows 验收按要求暂缓", timeout: 20_000 }, async () => {
+  assert.equal(CANCEL_GRACE_MS.uses, 10_000);
+  const dir = tmp();
+  const pidFile = join(dir, "pid.json");
+  const { runner, done } = runSteps([{ uses: "fake/stubborn", cwd: dir, with: { pidFile } }]);
+  await waitFile(pidFile);
+  const { self } = JSON.parse(readFileSync(pidFile, "utf8"));
+  const started = Date.now();
+  runner.cancel();
+  await sleep(4000);
+  assert.equal(alive(self), true, "uses 的宽限期不应是 script 的 3 秒");
+  const r = await done;
+  const elapsed = Date.now() - started;
+  assert.equal(r.state, "canceled");
+  assert.ok(elapsed >= 9500 && elapsed < 14000, `强杀耗时 ${elapsed}ms`);
+  assert.equal(alive(self), false);
+});
+
+test("script step 取消宽限期仍为 3 秒", { skip: process.platform === "win32" && "Windows 验收按要求暂缓", timeout: 15_000 }, async () => {
+  assert.equal(CANCEL_GRACE_MS.script, 3_000);
+  const dir = tmp();
+  const pidFile = join(dir, "pid");
+  const code = `process.on('SIGTERM',()=>{});require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`;
+  const { runner, done } = runSteps([{ script: `"${process.execPath}" -e "${code.replace(/"/g, '\\"')}"`, cwd: dir }]);
+  await waitFile(pidFile);
+  const started = Date.now();
+  runner.cancel();
+  const r = await done;
+  const elapsed = Date.now() - started;
+  assert.equal(r.state, "canceled");
+  assert.ok(elapsed >= 2500 && elapsed < 6000, `强杀耗时 ${elapsed}ms`);
 });
 
 test("幂等工具按 retry 重试；非幂等工具忽略 retry 只跑一次", async () => {

@@ -58,6 +58,31 @@ switch (tool) {
     setTimeout(() => { result("睡醒了"); process.exit(0); }, Number(opts.ms ?? 30000));
     break;
   }
+  case "graceful": {
+    // 模拟 Windows 控制台进程：收不到（这里是忽略）SIGTERM，只靠 stdin 的取消指令收尾
+    process.on("SIGTERM", () => {});
+    let buf = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      buf += chunk;
+      if (!buf.split("\n").some((l) => { try { return JSON.parse(l).type === "cancel"; } catch { return false; } })) return;
+      setTimeout(() => {
+        if (opts.mark) writeFileSync(opts.mark, "cleaned");
+        result("已取消");
+        process.exit(130);
+      }, 300);
+    });
+    if (opts["pid-file"]) writeFileSync(opts["pid-file"], JSON.stringify({ self: process.pid }));
+    setInterval(() => {}, 1000);
+    break;
+  }
+  case "stubborn": {
+    // 既不认 SIGTERM 也不读 stdin：只能等宽限期到了被强杀
+    process.on("SIGTERM", () => {});
+    if (opts["pid-file"]) writeFileSync(opts["pid-file"], JSON.stringify({ self: process.pid }));
+    setInterval(() => {}, 1000);
+    break;
+  }
   case "hold": {
     if (opts.mark) appendFileSync(opts.mark, `start ${opts["project-root"]} ${Date.now()}\n`);
     setTimeout(() => {

@@ -212,7 +212,7 @@ A6、A7 已实现，配套的 novoard-packs P4–P5、OSGToolset O2–O3 也一�
 - 进度：svn-update 报三个阶段加文件计数，计数按 1 秒节流，百分比封顶 99，完成时报 100。Unity 百分比只从含 DisplayProgressbar 的日志行解析。
 - OSGToolset：SIGTERM（Windows 另含 SIGBREAK）转成中断，结束自己启动的子进程后写 result json（summary「已取消」，exitCode 130）并返回 130。cmake-build、csharp-compile 输出阶段帧，并从 MSBuild 的 `xxx.vcxproj -> ...`、make 的 `[ 45%]`、ninja 的 `[12/40]` 行折算进度。另外修了一个原有问题：流式输出原来按 4KB 整块读，进度和日志都不实时，现在改为有多少读多少，并按行解码。
 - 平台限制（原有行为）：macOS 上 svn-update 会附带「未自动释放占用」，因为只有 win32 才释放占用；Unity 编辑器发现只扫描 Windows 路径。
-- Windows：agent 的 `taskkill /T` 第一次不带 /F，对控制台进程通常无效，所以 O2 的优雅收尾实际只在 POSIX 上生效；Windows 上 3 秒后的 `/F` 强杀照常兜底。Windows 验收按用户要求暂缓。
+- Windows：agent 的 `taskkill /T` 第一次不带 /F，对控制台进程通常无效，所以 O2 的优雅收尾实际只在 POSIX 上生效；Windows 上 3 秒后的 `/F` 强杀照常兜底。Windows 验收按用户要求暂缓。（2026-11-13 已改为经 stdin 下发取消，见文末「取消协议与废弃参数」。）
 - 验收：端到端在 macOS 上用 agent 的 runner 对真实 file:// svn 仓库跑通 versionControl/svn-update，状态 completed，进度显示正常。手机收到预检通知这一条没有实测，只有单测覆盖。
 
 ## A8 来源自发现与 Git 凭据（2026-11-11）
@@ -279,12 +279,32 @@ A6、A7 已实现，配套的 novoard-packs P4–P5、OSGToolset O2–O3 也一�
 ### 清单展示字段
 
 - ADR-0019 §1 增加可选的 `label`、`description`、`format`。novoard-packs 两个包、OSGToolset 已补齐。
-- 发现：novoard-packs 里 svn、git、unity-warmup 的 `path` 参数沿用自 cronkit（当时用来切换到 target 下的子目录），但现在的工具并不读取它。本次只如实标为「子路径（暂不生效）」，不给目录选择；是删除还是恢复其作用，另行决定。
+- 发现：novoard-packs 里 svn、git、unity-warmup 的 `path` 参数沿用自 cronkit（当时用来切换到 target 下的子目录），但现在的工具并不读取它。本次只如实标为「子路径（暂不生效）」，不给目录选择；是删除还是恢复其作用，另行决定。（2026-11-13 已删除，见文末。）
 
 ### 验收
 
 - `test/target-form.test.mjs`：cron 解析生成往返、有效性与时区下次运行、toDef 往返不丢字段、关掉定时、模板 target、cleanWith、参数与格式校验、未装包不拦截、ID 重复、`/api/packs/tools`。
 - novoard-packs `tests/manifest.test.ts`：与 cronkit 比较时忽略展示字段；每个参数都有 label，时长和时间参数带对应 format。
+
+## 取消协议与废弃参数（2026-11-13，agent v0.3.8）
+
+### 取消经 stdin 下发
+
+- ADR-0019 §5 修订：uses step 取消时往 stdin 写 `{"type":"cancel"}` 并关闭，同时照发 SIGTERM；uses 宽限期 10 秒，其余 step 维持 3 秒。工具进程退出后立即补杀残留进程组（POSIX）。
+- novoard-packs：CLI 监听 stdin 取消行，与 SIGTERM 走同一中止；svn 写工作副本的命令被中断后补跑 `svn cleanup`（限时 6 秒），svn 软杀宽限缩到 1 秒，保证在 agent 的 10 秒内跑完。URL 对 URL 的 copy、delete 不做 cleanup。
+- OSGToolset：守护线程读 stdin 取消行，先结束活动子进程再中断主线程；子进程 stdin 一律 DEVNULL。
+- 代价：运行超时、运行窗口硬截止对 uses step 最多晚 10 秒结束。
+
+### path 参数删除
+
+- novoard-packs 的 svn、git、unity-warmup 删除 `path` 参数，工作目录只由 step 的 `cwd`（表单「工程根」）决定。`general/release-occupants` 的 `path` 是真正在用的必填参数，保留。
+- 兼容旧 targets.yaml：工具没声明的 `path` 视为废弃参数（`RETIRED_PARAMS`），装载和执行都不报错，执行时运行日志提示一次已忽略；表单显示「已废弃，保存时会自动移除」，保存时移除。本机没装的包看不到清单，参数原样保留。
+
+### 验收
+
+- `test/packs-uses.test.mjs`：读 stdin 的假包收到取消指令后自行收尾，终态已取消；不响应的假包 10 秒后被强杀（4 秒时仍存活）；script step 3 秒强杀。
+- `test/target-form.test.mjs`：废弃参数执行期忽略、表单保存移除、release-occupants 的 path 保留、未装包原样保留。
+- novoard-packs `tests/cancel.test.ts`、OSGToolset `StdinCancelTests` 覆盖包内取消。Windows 验收按用户要求暂缓。
 
 ## 不在范围
 

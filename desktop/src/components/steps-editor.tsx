@@ -9,6 +9,7 @@ import {
   newStep,
   paramLabel,
   paramValue,
+  retiredParams,
   STEP_KIND_LABELS,
   type DraftStep,
   type IndexedTool,
@@ -207,6 +208,7 @@ function UsesStepForm({
   const tool = step.uses ? tools.get(step.uses) : undefined;
   const [advanced, setAdvanced] = useState(Boolean(step.cwd || step.retry || step.retryInterval));
   const missing = Boolean(step.uses) && !tool;
+  const retired = retiredParams(step.with, tool);
   const setParam = (name: string, value: ParamValue | undefined) => {
     const next = { ...step.with };
     if (value === undefined) delete next[name];
@@ -261,6 +263,9 @@ function UsesStepForm({
         </div>
       ) : null}
 
+      {retired.length ? (
+        <p className="text-[12px] text-warn">参数 {retired.join("、")} 已废弃，工具不再读取（工作目录由「工程根」决定），保存时会自动移除。</p>
+      ) : null}
       {tool && tool.params.length ? (
         <div className="grid gap-3 sm:grid-cols-2">
           {tool.params.map((spec) => (
