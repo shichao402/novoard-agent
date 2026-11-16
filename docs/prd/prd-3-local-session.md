@@ -60,7 +60,8 @@
 | `novoard_status` | `/api/runtime` + `/api/tiles` |
 | `novoard_list_targets` | `/api/targets` |
 | `novoard_upsert_target` / `novoard_delete_target` | `/api/targets`（读改写） |
-| `novoard_run_target` | `POST /a2a` |
+| `novoard_run_target` | `POST /a2a`（可带 `vars`，放进 data part，ADR-0020） |
+| `novoard_target_inputs` | `GET /api/targets/:id/inputs` |
 | `novoard_report_result` | `/api/peer/report` |
 | `novoard_request_detail` | `/api/peer/request` |
 | `novoard_signal_presence` | `/api/peer/presence` |

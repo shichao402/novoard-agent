@@ -14,6 +14,11 @@ export function parseUses(uses) {
   return { packId: text.slice(0, slash), toolId: text.slice(slash + 1) };
 }
 
+/** 工具种类（ADR-0020 §3）：query 只读、给选择框出候选项；缺省 action，即普通 uses step。 */
+export function toolKind(tool) {
+  return tool?.kind === "query" ? "query" : "action";
+}
+
 export function createPackRegistry({ packsDir } = {}) {
   /** 克隆目录 <packsDir>/<id>；包根 = 克隆目录 + subdir（manager 安装时记在 <packsDir>/.meta/<id>.json）。 */
   function cloneDirOf(packId) {

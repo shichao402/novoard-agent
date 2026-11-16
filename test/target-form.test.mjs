@@ -157,7 +157,7 @@ test("A9 /api/packs/tools：列出已装包的工具清单、平台、时区和�
     assert.equal(body.timezone, "Asia/Shanghai");
     assert.equal(body.scheduleEnabled, true);
     assert.deepEqual(body.packs.map((p) => p.id), ["general", "versionControl"], "按名排序，坏包不列");
-    assert.deepEqual(body.packs[0].tools[0], { id: "quit-idle", displayName: "quit-idle", description: "退出空闲进程", remoteWrite: false, platforms: ["win32"], params: [] });
+    assert.deepEqual(body.packs[0].tools[0], { id: "quit-idle", displayName: "quit-idle", kind: "action", description: "退出空闲进程", remoteWrite: false, platforms: ["win32"], params: [] });
     assert.equal(body.packs[1].tools[0].params[0].format, "path");
   } finally {
     await local.close();
@@ -188,4 +188,50 @@ test("废弃参数 path：工具没声明时执行期忽略不报错，表单保
   assert.deepEqual(def.steps[1].with, { path: "D:/w" });
   assert.deepEqual(def.steps[2].with, { path: "keep" }, "本机没装的包看不到清单，参数原样保留");
   assert.deepEqual([...RETIRED_PARAMS], ["path"]);
+});
+
+test("ADR-0020：表单没有 inputs 控件，保存时原样保留上次定义里的 inputs", () => {
+  const previous = {
+    title: "打开分支", expose: "local", audit: "summary", requiresApproval: false, notify: "never",
+    vars: { poolRoot: "D:/pool" },
+    inputs: [{ name: "branch", label: "分支", choices: { uses: "workingCopyPool/candidates", cwd: "{{poolRoot}}" }, default: "last" }],
+    steps: [{ script: "echo {{branch}}" }],
+  };
+  const def = toDef(toDraft("open-branch", previous), previous);
+  assert.deepEqual(def.inputs, previous.inputs);
+  assert.deepEqual(def.vars, previous.vars);
+});
+
+test("ADR-0020：表单编辑 inputs——三种候选来源往返、with 沿用、校验", () => {
+  const previous = {
+    title: "t", expose: "local", audit: "summary", requiresApproval: false, notify: "never", vars: {},
+    inputs: [
+      { name: "branch", choices: { uses: "workingCopyPool/candidates", with: { limit: 20 }, cwd: "{{poolRoot}}" }, default: "last", allowCustom: true },
+      { name: "mode", label: "模式", choices: ["fast", "full"], default: "fast" },
+      { name: "note", required: false },
+    ],
+    steps: [{ script: "echo" }],
+  };
+  const draft = toDraft("t", previous);
+  assert.deepEqual(draft.inputs.map((i) => i.source), ["query", "list", "free"]);
+  assert.deepEqual(toDef(draft, previous).inputs, previous.inputs);
+
+  const tools = indexTools([{ id: "workingCopyPool", displayName: "池", tools: [{ id: "candidates", displayName: "c", kind: "query", remoteWrite: false, params: [] }, { id: "acquire", displayName: "a", remoteWrite: false, params: [] }] }]);
+  const bad = {
+    ...draft,
+    schedule: "0 9 * * *",
+    inputs: [
+      { ...draft.inputs[0], uses: "workingCopyPool/acquire" },
+      { ...draft.inputs[1], name: "branch", list: " " },
+      { ...draft.inputs[2], name: "9x" },
+    ],
+  };
+  assert.deepEqual(validateDraft(bad, { tools }), [
+    "第 1 个输入的 workingCopyPool/acquire 不是查询工具",
+    "第 1 个输入「branch」必填，定时运行需要固定的默认值（不能用 last）",
+    "第 2 个输入的名字 branch 重复",
+    "第 2 个输入还没填候选项",
+    "第 3 个输入的名字要以字母或下划线开头，只含字母、数字、下划线",
+  ]);
+  assert.deepEqual(newDraft([]).inputs, []);
 });

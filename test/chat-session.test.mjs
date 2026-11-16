@@ -91,6 +91,34 @@ test("配置工具经本机接口执行，跑 Target 只走 A2A", async () => {
   assert.equal(calls.at(-1).method, "PUT");
 });
 
+test("ADR-0020：run_target 带 vars 走 data part，target_inputs 读输入描述，受理即失败时报错", async () => {
+  const calls = [];
+  let failNext = false;
+  const fetchImpl = async (url, init) => {
+    const path = String(url).replace("http://127.0.0.1:9", "");
+    calls.push({ path, method: init?.method ?? "GET", body: init?.body });
+    if (path === "/a2a") {
+      const status = failNext ? { state: "failed", message: "缺少输入：分支（branch）" } : { state: "submitted" };
+      return { ok: true, json: async () => ({ result: { id: "task-local-2", status } }) };
+    }
+    if (path === "/api/targets/open-branch/inputs") {
+      return { ok: true, json: async () => ({ ok: true, id: "open-branch", inputs: [{ name: "branch", choices: [{ value: "exp" }] }] }) };
+    }
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  const opts = { origin: "http://127.0.0.1:9", fetchImpl };
+  const described = JSON.parse(await dispatchNovoardTool("novoard_target_inputs", { id: "open-branch" }, opts));
+  assert.equal(described.inputs[0].name, "branch");
+  await assert.rejects(dispatchNovoardTool("novoard_target_inputs", { id: "../x" }, opts), /target 的 id/);
+  await dispatchNovoardTool("novoard_run_target", { id: "open-branch", vars: { branch: "exp" } }, opts);
+  const sent = JSON.parse(calls.at(-1).body);
+  assert.deepEqual(sent.params.message.parts, [{ kind: "text", text: "open-branch" }, { kind: "data", data: { branch: "exp" } }]);
+  await dispatchNovoardTool("novoard_run_target", { id: "open-branch" }, opts);
+  assert.equal(JSON.parse(calls.at(-1).body).params.message.parts.length, 1);
+  failNext = true;
+  await assert.rejects(dispatchNovoardTool("novoard_run_target", { id: "open-branch" }, opts), /缺少输入/);
+});
+
 test("能力包与定时工具走对应的本机接口", async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {
@@ -132,7 +160,7 @@ test("本机会话 skill 名与内容覆盖能力包和定时", async () => {
   assert.equal(NOVOARD_SKILL_NAME, "novoard-agent-ops");
   assert.ok(NOVOARD_SKILL_LEGACY_NAMES.includes("novoard-agent"));
   assert.match(NOVOARD_SKILL, new RegExp(`^---\\nname: ${NOVOARD_SKILL_NAME}\\n`));
-  for (const tool of ["novoard_list_packs", "novoard_pack_tools", "novoard_install_pack", "novoard_get_schedule", "novoard_set_schedule", "novoard_schedule_catch_up"]) {
+  for (const tool of ["novoard_list_packs", "novoard_pack_tools", "novoard_install_pack", "novoard_get_schedule", "novoard_set_schedule", "novoard_schedule_catch_up", "novoard_target_inputs"]) {
     assert.ok(NOVOARD_SKILL.includes(tool), `skill 应提到 ${tool}`);
   }
 });

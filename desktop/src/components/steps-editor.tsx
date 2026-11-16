@@ -239,10 +239,12 @@ function UsesStepForm({
             onChange={(event) => onChange({ uses: event.target.value ? `${packId}/${event.target.value}` : "", with: {} })}
           >
             <option value="">{packId ? "请选择" : "先选能力包"}</option>
-            {(pack?.tools ?? []).map((item) => (
+            {/* 查询工具只能给 inputs 提供候选项，不能当步骤（ADR-0020 §3） */}
+            {(pack?.tools ?? []).filter((item) => item.kind !== "query" || item.id === toolPart).map((item) => (
               <option key={item.id} value={item.id}>
                 {item.displayName}
                 {item.remoteWrite ? " · 写远端" : ""}
+                {item.kind === "query" ? " · 查询工具，不能作步骤" : ""}
                 {unsupported(item, platform) ? ` · 仅 ${platformText(item.platforms ?? [])}` : ""}
               </option>
             ))}

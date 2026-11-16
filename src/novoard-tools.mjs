@@ -24,7 +24,7 @@ export async function dispatchNovoardTool(name, args, { origin, fetchImpl = glob
       agentId: runtime.agentId,
       hubConnected: runtime.hubConnected,
       hubRegistered: runtime.hubRegistered,
-      targets: (tiles.tiles ?? []).map((tile) => ({ id: tile.id, title: tile.title, requiresApproval: tile.requiresApproval, last: tile.last })),
+      targets: (tiles.tiles ?? []).map((tile) => ({ id: tile.id, title: tile.title, requiresApproval: tile.requiresApproval, inputs: tile.inputs === true || undefined, last: tile.last })),
     });
   }
   if (name === "novoard_list_targets") {
@@ -70,17 +70,26 @@ export async function dispatchNovoardTool(name, args, { origin, fetchImpl = glob
     });
     return JSON.stringify({ ok: true, id: input.id, count: saved.count });
   }
+  if (name === "novoard_target_inputs") {
+    const id = String(input.id ?? "");
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new Error("id 应为 target 的 id");
+    return JSON.stringify(await callJson(fetchImpl, origin, `/api/targets/${id}/inputs`));
+  }
   if (name === "novoard_run_target") {
+    const vars = input.vars && typeof input.vars === "object" && !Array.isArray(input.vars) ? input.vars : null;
+    const parts = [{ kind: "text", text: input.id }];
+    if (vars && Object.keys(vars).length > 0) parts.push({ kind: "data", data: Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, String(v)])) });
     const body = await callJson(fetchImpl, origin, "/a2a", {
       method: "POST",
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: `agent-${Date.now()}`,
         method: "message/send",
-        params: { message: { role: "user", parts: [{ kind: "text", text: input.id }], metadata: input.forPeer ? { forPeer: true } : undefined } },
+        params: { message: { role: "user", parts, metadata: input.forPeer ? { forPeer: true } : undefined } },
       }),
     });
     if (body.error) throw new Error(body.error.message || "A2A 拒绝了这次执行");
+    if (body.result?.status?.state === "failed") throw new Error(body.result.status.message || "执行被拒绝");
     return JSON.stringify({ taskId: body.result?.id, status: body.result?.status, via: "a2a" });
   }
   if (name === "novoard_ask_member") {

@@ -83,7 +83,10 @@ export function parseProgressLine(line) {
   }
 }
 
-/** 读 --result-json 并清理临时文件。step 结果描述依次取 summary、detail，再退回 stdout 末 12 行。 */
+/**
+ * 读 --result-json 并清理临时文件。step 结果描述依次取 summary、detail，再退回 stdout 末 12 行。
+ * 结构化字段原样透传：choices（查询工具候选项，ADR-0020 §3）、summary、pool（workingCopyPool 的槽位信息）。
+ */
 export function readResult({ resultJson, code, stdout = "", stderr = "", tool }) {
   let parsed = null;
   if (resultJson && existsSync(resultJson)) {
@@ -96,11 +99,15 @@ export function readResult({ resultJson, code, stdout = "", stderr = "", tool })
   }
   const name = tool?.displayName || tool?.id || "工具";
   const fromJson = parsed ? parsed.summary || parsed.detail || "" : "";
+  const extra = {};
+  if (Array.isArray(parsed?.choices)) extra.choices = parsed.choices;
+  if (typeof parsed?.summary === "string" && parsed.summary) extra.summary = parsed.summary;
+  if (parsed?.pool && typeof parsed.pool === "object") extra.pool = parsed.pool;
   if (code === EXIT.OK) {
-    return { ok: true, detail: fromJson || tailLines(stdout) || `${name} 完成`, skipped: parsed?.skipped === true };
+    return { ok: true, detail: fromJson || tailLines(stdout) || `${name} 完成`, skipped: parsed?.skipped === true, ...extra };
   }
   const prefix = code === EXIT.USAGE ? "参数错误：" : code === EXIT.UNEXPECTED ? "意外错误：" : "";
-  return { ok: false, detail: `${prefix}${fromJson || tailLines(stderr || stdout) || `${name} 退出码 ${code}`}` };
+  return { ok: false, detail: `${prefix}${fromJson || tailLines(stderr || stdout) || `${name} 退出码 ${code}`}`, ...extra };
 }
 
 function tailLines(text) {

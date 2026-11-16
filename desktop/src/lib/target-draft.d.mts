@@ -36,7 +36,30 @@ export type Draft = {
   deadline: string;
   template: string;
   steps: DraftStep[];
+  inputs: DraftInput[];
 };
+
+export type InputSource = "free" | "list" | "query";
+
+export type DraftInput = {
+  key: string;
+  name: string;
+  label: string;
+  source: InputSource;
+  /** 静态候选，一行一个（也接受逗号）。 */
+  list: string;
+  uses: string;
+  /** 查询工具参数，表单不编辑，原样沿用。 */
+  with?: Record<string, string | number | boolean | string[]>;
+  cwd: string;
+  default: string;
+  allowCustom: boolean;
+  required: boolean;
+};
+
+export const INPUT_NAME_RE: RegExp;
+export const INPUT_SOURCE_LABELS: Record<InputSource, string>;
+export function newInput(existingNames?: string[]): DraftInput;
 
 export type IndexedTool = PackTool & { packId: string; packName: string };
 

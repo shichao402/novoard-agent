@@ -6,6 +6,7 @@
  * artifact（契约 2.0 §7）：上传携带 taskId + sha256，hub 校验 token 身份与任务 member 归属。
  * ops 心跳：agent.ping 定时（hub 侧 PING_TIMEOUT 60s，客户端 25s 间隔）。
  */
+import { resolveInputs } from "./inputs.mjs";
 import WebSocket from "ws";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -41,7 +42,7 @@ function callerParts(parts, text) {
   return outgoing;
 }
 
-export function createTunnelClient({ config, card, targets, runner, stateDir, runTraceDir, bootId = "", app, log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice, onPackSources } = {}) {
+export function createTunnelClient({ config, card, targets, runner, stateDir, runTraceDir, bootId = "", app, log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice, onPackSources, inputMemory = null } = {}) {
   if (!config?.ok) throw new Error(`lite-agent 配置无效：${config?.reason}`);
   const { agentId, hubUrl, agentToken, contractVersion } = config;
   const hubHttpUrl = new URL(hubUrl);
@@ -445,10 +446,16 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
       uplink(env.taskId, statusNotification(env.taskId, "failed", `unknown target：${skillId}`));
       return;
     }
-    runner.launch({
+    // ADR-0020 §4：Hub 与对等触发同样受理前取值，必填缺值当场 failed（ADR-0009）
+    const resolved = resolveInputs({ targetId: skillId, target: runCfg, vars, memory: inputMemory });
+    if (!resolved.ok) {
+      uplink(env.taskId, statusNotification(env.taskId, "failed", resolved.reason));
+      return;
+    }
+    const launched = runner.launch({
       taskId: env.taskId,
       skillId,
-      vars: { ...runCfg.vars, ...vars },
+      vars: { ...runCfg.vars, ...resolved.vars },
       steps: runCfg.expanded,
       // hub 目前不标注调用方是否为成员；带 from 的视为对等触发（PRD-7 A2 trigger 字段）
       trigger: message.metadata?.from ? "peer" : "hub",
@@ -463,6 +470,7 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
         uplink(env.taskId, statusNotification(env.taskId, "working", `step ${i}/${n}：${d}`));
       },
     });
+    if (launched?.ok) inputMemory?.remember(skillId, runCfg, resolved.vars);
   }
 
   function runTraceNotification(taskId, event) {

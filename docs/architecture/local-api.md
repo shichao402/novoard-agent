@@ -7,6 +7,7 @@
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/tiles` | 磁贴数据：targets + 各 target 最近一次执行 + 最近 20 个任务 |
+| `GET` | `/api/targets/:id/inputs` | 点击时的运行时输入描述：现场调查询工具取候选项、解析默认值（[ADR-0020](../adr/0020-tile-runtime-inputs.md)） |
 | `GET` | `/api/stream/:taskId` | SSE 订阅单任务；先写快照帧，终态后关流 |
 | `GET` | `/api/shortcuts/:id/runs` | 该 target 的运行记录列表（含 `retentionDays: 30`） |
 | `GET` | `/api/shortcuts/:id/runs/:taskId` | 单次运行的输出行 |
@@ -20,6 +21,7 @@
       "id": "plan",
       "title": "做个计划",
       "requiresApproval": false,
+      "inputs": false,
       "concurrency": 1,
       "timeout": "10m",
       "icon": "▶",
@@ -33,6 +35,29 @@
 过滤条件是 `t.expose !== "none"`，但 schema 里 `expose` 只有 `a2a` 与 `local` 两个值，`none` 不存在，所以这个 filter 恒为真。见 [ADR-0015](../adr/0015-capability-derived-from-targets.md)。
 
 `last` 是扁平形状，与 SSE 帧的嵌套 `status` 不同，界面要写两套渲染。改造目标是让两者同构，见 [ADR-0007](../adr/0007-progress-channel.md)。
+
+`inputs: true` 表示该 target 声明了运行时输入，界面点击后先调 `GET /api/targets/:id/inputs` 弹选择框，再带值触发。该接口返回：
+
+```json
+{
+  "ok": true,
+  "id": "open-branch",
+  "title": "开分支",
+  "inputs": [
+    {
+      "name": "branch",
+      "label": "分支",
+      "required": true,
+      "allowCustom": true,
+      "dynamic": true,
+      "default": "exp",
+      "choices": [{ "value": "exp", "label": "体验服", "hint": "就绪 · 落后 3" }]
+    }
+  ]
+}
+```
+
+`default` 已解析（`last` 换成上次受理的值，无记录为空串）。`dynamic` 表示候选来自查询工具。查询工具超时（15 秒）、退出码非 0、结果格式非法或不是 `kind: "query"` 时，`choices` 为空、多出 `error` 字段写原因、`allowCustom` 临时置真。target 不存在返回 `404`。
 
 ## SSE 帧
 
@@ -80,6 +105,15 @@
 `tasks/get` 对未知 id 返回 `-32001 task not found`。`tasks/cancel` 找不到任务时也返回 `-32001`。
 
 target 不存在时 `message/send` 返回 `-32002 unknown target: x`，不建任务。
+
+target 声明了 `inputs` 时，`data` part 里的值按 [ADR-0020](../adr/0020-tile-runtime-inputs.md) §4 取值：传入值优先，其次 `default`/`last`。必填项仍缺值或不在静态候选内时，任务当场置 `failed`（[ADR-0009](../adr/0009-launch-failure-must-be-terminal.md)），`status.message` 列出缺的输入，不 launch，也不写 `last`。受理成功后才把本次值写入 `<state>/input-memory.json`。Hub 委派的 `run <id> {json}` 走同一套取值。
+
+## 能力包
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/api/packs` | 已安装能力包列表 |
+| `GET` | `/api/packs/tools` | 可用工具与参数；每个工具带 `kind: "action" \| "query"`，编辑器的步骤下拉只列 action，输入的查询工具下拉只列 query |
 
 一个细节：`tasks/cancel` 不管任务当前是什么状态都会置 `canceled`。对一个已经是 `completed` 的任务调取消，状态会被改成 `canceled` 并广播。这是当前实现的缺陷，取消前应判断是否已是终态。
 

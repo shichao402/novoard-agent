@@ -4,6 +4,7 @@
  * 启动时序（纪律一）：装载 targets → schema 校验 → 展开 → 派生 card → 连隧道 → hello。
  * 本地审计：agent 侧一份 JSONL（契约 §6 落两侧各一份），与 hub 可对账。
  */
+import { createInputMemory, createInputService } from "./inputs.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -106,6 +107,9 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   const bootId = randomUUID();
   const scriptEnv = resolveScriptEnv();
   log.info?.(`[env] target 脚本环境：${scriptEnv.source}（${scriptEnv.detail}），PATH=${scriptEnv.env.PATH ?? ""}`);
+  // 磁贴运行时输入（ADR-0020）：last 记在 <dataDir>/input-memory.json；查询工具进程外调用，15 秒超时
+  const inputMemory = createInputMemory({ file: join(state, "input-memory.json") });
+  const inputService = createInputService({ packs, memory: inputMemory, env: scriptEnv.env, log });
   const runtime = createAgentRuntime({
     targets: expanded.targets,
     log,
@@ -173,6 +177,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     onFatal,
     onAgentMessage: (message) => peer?.receive(message),
     onAgentNotice: (message) => peer?.note(message),
+    inputMemory,
     onPackSources: (list) => {
       const r = packSources.replace(list);
       log.info?.(`[packs] 已缓存 hub 下发的能力包来源 ${r.count} 条`);
@@ -220,6 +225,8 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     log,
     store,
     onTargetsSaved,
+    inputMemory,
+    inputService,
     status: () => ({ hubConnected: tunnel.connected === true, hubRegistered: tunnel.registered === true }),
     settings: {
       read: () => ({

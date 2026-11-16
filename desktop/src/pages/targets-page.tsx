@@ -1,5 +1,6 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { InputsEditor } from "@/components/inputs-editor";
 import { ScheduleEditor } from "@/components/schedule-editor";
 import { StepsEditor } from "@/components/steps-editor";
 import { Button } from "@/components/ui/button";
@@ -169,6 +170,13 @@ export function TargetsPage({ base }: { base: string }) {
                 onChange={(steps) => update({ steps })}
               />
             )}
+
+            <InputsEditor
+              inputs={current.inputs}
+              packs={packTools.packs}
+              scheduled={Boolean(current.schedule.trim())}
+              onChange={(inputs) => update({ inputs })}
+            />
 
             <ScheduleEditor
               key={`${selected}-${current.id}`}

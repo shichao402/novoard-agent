@@ -44,6 +44,7 @@
 - `platforms`（新增，可选）：缺省视为全平台。
 - params 的类型与校验规则沿用 cronkit `validate.ts`。
 - params 可选展示字段（2026-11-12 修订）：`label` 是表单上显示的名字，缺省用 `name`；`description` 是说明；`format` 取 `path`（带目录选择，相对工程根）、`duration`（如 `10m`）、`time`（如 `08:00`）。这三项只影响 agent 桌面端的 Target 表单，不参与校验和调用。
+- `kind`（2026-11-16 修订，可选）：`action`（缺省）或 `query`。`query` 是只读的查询工具，只能作为 target `inputs` 的候选来源（`choices.uses`），不能写进步骤，装载期会拦下；agent 以 15 秒超时进程外调用它，不加路径锁、不受 `concurrency` 约束。见 [ADR-0020](0020-tile-runtime-inputs.md) §3。
 
 ### 2. 调用
 
@@ -63,7 +64,9 @@
 ### 3. 结果
 
 - 退出码：0 成功；64 参数错；99 意外错误；130 被中断；其他非 0 视为失败。
-- `--result-json` 文件：`{ "summary"?: string, "detail"?: string, "skipped"?: boolean }`。step 的结果描述依次取 summary、detail，都没有时取 stdout 末 12 行。
+- `--result-json` 文件：`{ "summary"?: string, "detail"?: string, "skipped"?: boolean, "choices"?: Array<string | { value, label?, hint? }>, "pool"?: object }`。step 的结果描述依次取 summary、detail，都没有时取 stdout 末 12 行。
+- `choices`（2026-11-16 修订）：`kind: "query"` 工具返回的候选项。缺失或格式不对时，选择框退化为自由输入并显示原因（ADR-0020 §3）。
+- `pool` 等其他结构化字段由内核原样透传到 step 结果，不做解释；目前只有 workingCopyPool 使用。
 
 ### 4. 进度（新增，可选）
 

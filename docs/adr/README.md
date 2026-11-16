@@ -27,6 +27,7 @@
 | [0009](0009-launch-failure-must-be-terminal.md) | launch 失败必须当场变成终态并通知 | Accepted | 2026-10-20 |
 | [0008](0008-step-level-progress.md) | 进度以 step 为单位，开始与结束各发一次 | Accepted | 2026-10-20 |
 | [0019](0019-capability-pack-protocol.md) | 能力包协议：进程外调用，沿用 cronkit toolset schemaVersion 1 | Accepted | 2026-11-09 |
+| [0020](0020-tile-runtime-inputs.md) | 磁贴运行时输入：点击时选参数，候选项由能力包提供 | Accepted | 2026-11-16 |
 
 ### 状态与通道
 

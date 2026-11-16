@@ -1,6 +1,6 @@
 /**
  * Agent Card 派生（契约 §2）：每个 expose: a2a 的 target 生成一个 skill 条目；
- * skill id = target id；description = title + vars 参数说明。
+ * skill id = target id；description = title + vars 参数说明 + inputs 说明（ADR-0020 §5）。
  * targets YAML 与模板从 agents/<agentId>/ 同级目录装载，装载即用 target.json schema 校验（纪律一）。
  */
 import { readFileSync, existsSync } from "node:fs";
@@ -9,6 +9,7 @@ import { parse } from "yaml";
 import { createFrameValidator } from "./contract/frames.mjs";
 import { loadProfile } from "./profile.mjs";
 import { validateToolParams } from "./packs/validate.mjs";
+import { toolKind } from "./packs/registry.mjs";
 
 /** 保留技能：表示这台机器能用自然语言和别的成员对话。不能被 Target 占用。 */
 export const CONVERSE_SKILL_ID = "converse";
@@ -48,10 +49,11 @@ export function validateTargetsData(data, validate) {
  * 定义错误（拒绝保存、启动失败）：with 不通过工具 params 校验；remoteWrite 工具所在 target 没有 requiresApproval: true。
  * 不算定义错误、交给诊断（A6）：包没装、manifest 读不了、包里没有这个工具（多半是包版本旧）、平台不支持。
  * with 中含 {{var}} 的值要到触发时才知道，装载期跳过它的类型检查，运行时再校验。
+ * 同处还做 inputs 检查（ADR-0020 §1，见 validateInputDefs），以及 query 工具不能当 uses step。
  */
 export function validateUsesSteps(expandedTargets, packs) {
-  if (!packs) return [];
-  const errors = [];
+  const errors = validateInputDefs(expandedTargets, packs);
+  if (!packs) return errors;
   for (const [id, t] of Object.entries(expandedTargets ?? {})) {
     const steps = t.expanded ?? t.steps;
     if (!Array.isArray(steps)) continue;
@@ -62,6 +64,10 @@ export function validateUsesSteps(expandedTargets, packs) {
       const tool = packs.lookupTool(step.uses.slice(0, slash), step.uses.slice(slash + 1));
       if (!tool) return;
       const where = `targets.${id}.steps[${i}]`;
+      if (toolKind(tool) === "query") {
+        errors.push(`${where}: ${step.uses} 是查询工具，只能用作 inputs 的 choices，不能作为步骤执行`);
+        return;
+      }
       if (tool.remoteWrite === true && t.requiresApproval !== true) {
         errors.push(`${where}: ${step.uses} 会写远端，所在 target 必须设 requiresApproval: true`);
       }
@@ -75,6 +81,42 @@ export function validateUsesSteps(expandedTargets, packs) {
       const checked = validateToolParams(tool, input);
       const real = checked.errors.filter((e) => ![...deferred].some((k) => e === `缺少必填参数: ${k}`));
       for (const e of real) errors.push(`${where}: ${step.uses} 参数错误：${e}`);
+    });
+  }
+  return errors;
+}
+
+/**
+ * inputs 的装载期检查（ADR-0020 §1）。入参是展开后的 targets（vars 已含模板默认值）。
+ * - name 不得重复，也不得与 vars 重名（两个来源争优先级）。
+ * - choices.uses 指向的工具在本机已装时必须是 kind: "query"；包没装不算定义错误，点击时退化为自由输入。
+ * - 带 schedule 的 target，每个必填 input 都要有静态 default（last 首次运行前没有值）。
+ */
+export function validateInputDefs(expandedTargets, packs) {
+  const errors = [];
+  for (const [id, t] of Object.entries(expandedTargets ?? {})) {
+    if (!Array.isArray(t?.inputs)) continue;
+    const seen = new Set();
+    const vars = t.vars ?? {};
+    t.inputs.forEach((input, i) => {
+      const where = `targets.${id}.inputs[${i}]`;
+      const name = input?.name;
+      if (seen.has(name)) errors.push(`${where}: name ${name} 重复`);
+      seen.add(name);
+      if (Object.prototype.hasOwnProperty.call(vars, name)) {
+        errors.push(`${where}: name ${name} 与 vars 重名，请删掉其中一个`);
+      }
+      const spec = input?.choices;
+      if (spec && !Array.isArray(spec) && typeof spec.uses === "string" && packs) {
+        const slash = spec.uses.indexOf("/");
+        const tool = slash > 0 ? packs.lookupTool(spec.uses.slice(0, slash), spec.uses.slice(slash + 1)) : null;
+        if (tool && toolKind(tool) !== "query") {
+          errors.push(`${where}: ${spec.uses} 不是查询工具（kind: query），不能提供候选项`);
+        }
+      }
+      if (t.schedule && input?.required !== false && (input?.default === undefined || input?.default === "last")) {
+        errors.push(`${where}: 带 schedule 的 target，必填输入 ${name} 需要静态 default（last 首次运行前没有值）`);
+      }
     });
   }
   return errors;
@@ -167,5 +209,19 @@ function capabilityText(target) {
   const schedule = target.schedule ? `安排：${target.schedule}` : "";
   const vars = Object.keys(target.vars ?? {});
   const params = vars.length ? `参数：${vars.join("、")}` : "";
-  return [title, schedule, params].filter(Boolean).join("。");
+  const inputs = Array.isArray(target.inputs) && target.inputs.length
+    ? `输入：${target.inputs.map(describeInput).join("；")}`
+    : "";
+  return [title, schedule, params, inputs].filter(Boolean).join("。");
+}
+
+/** 技能描述里的一条输入（ADR-0020 §5）：名称、label、静态候选项、默认值，供 Hub 与对等方显式传参。 */
+function describeInput(input) {
+  const notes = [];
+  if (input.label && input.label !== input.name) notes.push(input.label);
+  if (Array.isArray(input.choices)) notes.push(`候选 ${input.choices.join("/")}`);
+  else if (input.choices?.uses) notes.push("候选由本机查询");
+  if (input.default !== undefined) notes.push(input.default === "last" ? "默认上次的值" : `默认 ${input.default}`);
+  if (input.required === false) notes.push("可空");
+  return notes.length ? `${input.name}（${notes.join("，")}）` : input.name;
 }

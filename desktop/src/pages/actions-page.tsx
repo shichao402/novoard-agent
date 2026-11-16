@@ -1,5 +1,6 @@
 import { AlertTriangle, Clock, Play, RotateCcw, ScrollText } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { InputsDialog } from "@/components/inputs-dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Switch } from "@/components/ui/switch";
 import type { ScheduleInfo, Tile } from "@/lib/api";
@@ -59,6 +60,7 @@ export function ActionsPage({
   const [live, setLive] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState<Tile | null>(null);
+  const [ask, setAsk] = useState<Tile | null>(null);
   const [watch, setWatch] = useState<Tile | null>(null);
   const [runs, setRuns] = useState<ShortcutRun[]>([]);
   const [taskId, setTaskId] = useState("");
@@ -67,15 +69,17 @@ export function ActionsPage({
   const [logError, setLogError] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
 
-  async function run(tile: Tile) {
+  async function run(tile: Tile, vars?: Record<string, string>) {
     setPending(tile.id);
     setError("");
     setLive((current) => ({ ...current, [tile.id]: "已提交" }));
     try {
-      const result = await runTarget(base, tile.id);
+      const result = await runTarget(base, tile.id, vars);
       if (result.error?.message) throw new Error(result.error.message);
       const nextTaskId = result.result?.id;
       if (!nextTaskId) return;
+      // 受理前取值失败（必填缺值、值不在候选里）当场 failed，不会有进度流
+      if (result.result?.status?.state === "failed") throw new Error(result.result.status.message || "执行失败");
       if (watch?.id === tile.id) setTaskId(nextTaskId);
       const source = new EventSource(`${base}/api/stream/${nextTaskId}`);
       source.onmessage = (event) => {
@@ -201,7 +205,7 @@ export function ActionsPage({
                     className="grid size-8 place-items-center rounded-full bg-accent/15 text-accent disabled:opacity-60"
                     aria-label={`执行 ${tile.title}`}
                     disabled={pending === tile.id}
-                    onClick={() => (tile.requiresApproval ? setConfirm(tile) : void run(tile))}
+                    onClick={() => (tile.inputs ? setAsk(tile) : tile.requiresApproval ? setConfirm(tile) : void run(tile))}
                   >
                     <Play size={14} />
                   </button>
@@ -265,6 +269,16 @@ export function ActionsPage({
           </div>
         </section>
       ) : null}
+      <InputsDialog
+        base={base}
+        target={ask}
+        onClose={() => setAsk(null)}
+        onSubmit={(vars) => {
+          const tile = ask;
+          setAsk(null);
+          if (tile) void run(tile, vars);
+        }}
+      />
       <ConfirmDialog
         open={confirm !== null}
         title={`执行 ${confirm?.title ?? ""}`}

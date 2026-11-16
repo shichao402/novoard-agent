@@ -44,6 +44,52 @@ targets:
 | `timeout` | duration | `^\d+(s\|m\|h\|d)$` | `10m` |
 | `lostTtl` | duration | 同上 | `10m` |
 | `approvalTtl` | duration | 同上 | `10m` |
+| `inputs` | array | 每项 `name`（必填，`^[A-Za-z_][A-Za-z0-9_]*# PRD-2 Target 定义与编辑器
+
+## 背景
+
+target 是本仓的操作单元。用户通过编辑器改 `targets.yaml`，保存即校验、即生效，不重启。
+
+## 数据形态
+
+真实 schema（`src/contract/schemas/target.json`）：
+
+```yaml
+targets:
+  plan:
+    title: 做个计划
+    expose: a2a
+    audit: summary
+    requiresApproval: false
+    notify: on-failure
+    concurrency: 1
+    timeout: 10m
+    vars:
+      scope: project
+    steps:
+      - script: npm run plan
+      - script: npm run build
+```
+
+顶层必须有 `targets` 键，其下每个 target 有五个必填字段：`title`、`expose`、`audit`、`requiresApproval`、`notify`。另外必须提供 `steps` 或 `template` 之一（`oneOf`）。
+
+| 字段 | 类型 | 取值 | 默认 |
+| --- | --- | --- | --- |
+| `title` | string | 非空 | 必填 |
+| `expose` | enum | `a2a` / `local` | 必填 |
+| `audit` | enum | `none` / `summary` / `full` | 必填 |
+| `requiresApproval` | boolean | | 必填 |
+| `notify` | enum | `always` / `on-failure` / `never` | 必填 |
+| `schedule` | string | cron 表达式 | 可选 |
+| `steps` | array | 非空，四种类型 | 与 `template` 二选一 |
+| `template` | string | 非空 | 与 `steps` 二选一 |
+| `vars` | object | 值只能是 string/number/boolean | 可选 |
+| `offline` | enum | `reject` / `queue` | `reject` |
+| `offlineTtl` | duration | `^\d+(s\|m\|h\|d)$` | `30m` |
+| `concurrency` | integer | 1–32 | 1 |
+| `timeout` | duration | `^\d+(s\|m\|h\|d)$` | `10m` |
+| `lostTtl` | duration | 同上 | `10m` |
+）、`label`、`choices`（字符串数组或 `{ uses, with?, cwd? }`）、`default`（`last` 表示上次的值）、`allowCustom`、`required`（缺省 true）；契约 2.6 | 可选，见 [ADR-0020](../adr/0020-tile-runtime-inputs.md) |
 
 关键差异（此前文档写错的地方）：
 
@@ -81,6 +127,8 @@ targets:
 
 **US6 模型也能改。** `novoard_upsert_target` / `novoard_delete_target` 走同一套 HTTP 接口与校验。
 
+**US7 点击时选参数。** 带 `inputs` 的磁贴点击后先弹选择框，候选项可以是固定列表，也可以由能力包的查询工具现场给出；表单可编辑 inputs，保存时不丢字段。
+
 ## 校验与保存
 
 `targets-store.save` 的顺序：
@@ -105,6 +153,8 @@ targets:
 ## 变量插值
 
 语法 `{{var}}`。优先级：触发时传入的 vars > target 的 `vars` > 模板默认值。
+
+`inputs` 是有定义的触发参数（[ADR-0020](../adr/0020-tile-runtime-inputs.md)）：受理前由 `resolveInputs` 取值，顺序是传入值 > `default`（`last` 取上次受理时的值）。必填项仍缺值、或静态候选不允许自定义而值不在列表里时，任务当场 `failed`，不进入执行（ADR-0009）。取到的值并入触发 vars，在步骤里同样用 `{{name}}` 引用。`inputs.name` 不得与 `vars` 重名；带 `schedule` 的 target，必填输入要有静态 `default`。这几条在装载期检查，与 schema 校验一起拦在保存前。
 
 无来源即失败，不静默替换成空串。`interp` 直接 `throw`，`runner.run` 里抛错会让整次运行归 `failed`。这是契约 §1.2 的硬要求，不是本仓自选。
 

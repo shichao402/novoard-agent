@@ -8,6 +8,8 @@
  * 默认只监听回环。uiHost 配成非回环地址时，同一服务对机器网络或公网开放，并要求独立 uiToken。
  * 本地闭环（PRD-1 AC2）：hub 不在线时本端点完整可用；hub 在线时终态经隧道上行同步给 hub 队列。
  */
+import { resolveInputs, hasInputs } from "./inputs.mjs";
+import { toolKind } from "./packs/registry.mjs";
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import { serveConsole } from "./console-ui.mjs";
@@ -105,7 +107,7 @@ export function handleDesktopCors(req, res) {
   return false;
 }
 
-export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile, packManager = null, packRegistry = null, gitAuth = null, diagnoseTarget = null, schedule = null } = {}) {
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile, packManager = null, packRegistry = null, gitAuth = null, diagnoseTarget = null, schedule = null, inputMemory = null, inputService = null } = {}) {
   const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
@@ -120,6 +122,8 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
   function trigger({ skillId, vars = {}, trigger: source = "manual", deadlineAt, deadlineLabel, onState } = {}) {
     const def = getTargets()[skillId];
     if (!def) return { ok: false, reason: `unknown target: ${skillId}` };
+    // ADR-0020 §4：受理前统一取值（传入 > default/last），必填缺值当场失败（ADR-0009）
+    const resolved = resolveInputs({ targetId: skillId, target: def, vars, memory: inputMemory });
     // taskId 用 task-local- 前缀：过 hub 信封 ^task- 校验（终态上行镜像合法），且与 hub 序列（task-YYYYMMDD-NNN）不撞形
     const id = `task-local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const task = {
@@ -129,8 +133,15 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
     };
     tasks.put(task);
     audit?.({ lane: "a2a", target: skillId, taskId: id, outcome: "submitted", detail: { via: "localhost-a2a" } });
+    if (!resolved.ok) {
+      task.state = "failed";
+      task.status = { state: "failed", message: resolved.reason };
+      audit?.({ lane: "a2a", target: skillId, taskId: id, outcome: "failed", detail: { reason: resolved.reason } });
+      try { onState?.("failed"); } catch {}
+      return { ok: true, task, launch: { ok: false, reason: resolved.reason } };
+    }
     const r = runtime.launch({
-      taskId: id, skillId, vars,
+      taskId: id, skillId, vars: resolved.vars,
       steps: def.expanded,
       trigger: source,
       deadlineAt,
@@ -155,8 +166,9 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       task.state = "failed";
       task.status = { state: "failed", message: r.reason };
       audit?.({ lane: "a2a", target: skillId, taskId: id, outcome: "failed", detail: { reason: r.reason } });
-    } else if (r.log) {
-      task.log = r.log;
+    } else {
+      if (r.log) task.log = r.log;
+      inputMemory?.remember(skillId, def, resolved.vars); // last 只在受理成功后写入
     }
     return { ok: true, task, launch: r };
   }
@@ -326,7 +338,7 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
           const last = tasks.lastOf(id);
           const s = byId.get(id);
           return {
-            id, title: t.title ?? id, requiresApproval: t.requiresApproval === true, concurrency: t.concurrency ?? 1, timeout: t.timeout ?? "10m", icon: t.icon ?? "▶",
+            id, title: t.title ?? id, requiresApproval: t.requiresApproval === true, inputs: hasInputs(t), concurrency: t.concurrency ?? 1, timeout: t.timeout ?? "10m", icon: t.icon ?? "▶",
             last: last ? { state: last.state, message: last.status.message, at: last.updatedAt, log: last.log ?? null } : null,
             problems: diagnoseTarget?.(t) ?? [],
             ...(t.schedule ? { schedule: t.schedule, nextRun: s?.nextRun ?? null, lastScheduled: s?.last ?? null } : {}),
@@ -334,6 +346,18 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
         });
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ tiles, tasks: tasks.list().slice(0, 20), schedule: sched ? { enabled: sched.enabled, timezone: sched.timezone } : null }));
+      return;
+    }
+    // 磁贴运行时输入（ADR-0020 §2）：选择框数据，含查询工具现场给出的候选项与解析后的默认值
+    const inputsRoute = url.pathname.match(/^\/api\/targets\/([a-z0-9][a-z0-9-]*)\/inputs$/);
+    if (inputsRoute && req.method === "GET") {
+      const id = inputsRoute[1];
+      const def = getTargets()[id];
+      if (!def) return json(res, 404, { ok: false, reason: `unknown target: ${id}` });
+      if (!inputService) return json(res, 200, { ok: true, id, title: def.title ?? id, inputs: [] });
+      inputService.describe(id, def)
+        .then((d) => json(res, 200, { ok: true, ...d }))
+        .catch((error) => json(res, 500, { ok: false, reason: error?.message ?? String(error) }));
       return;
     }
     // 定时总开关与立即补跑（PRD-7 A7）
@@ -518,6 +542,7 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
           tools: m.tools.map((t) => ({
             id: t.id,
             displayName: t.displayName ?? t.id,
+            kind: toolKind(t),
             ...(t.description ? { description: t.description } : {}),
             remoteWrite: t.remoteWrite === true,
             ...(Array.isArray(t.platforms) && t.platforms.length ? { platforms: t.platforms } : {}),

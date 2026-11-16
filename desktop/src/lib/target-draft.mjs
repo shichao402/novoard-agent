@@ -58,6 +58,59 @@ function stepToDraft(step) {
   return { key: stepKey(), kind: "template", template: step.template };
 }
 
+export const INPUT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** 运行时输入的候选来源（ADR-0020 §1）：free 自由输入、list 静态列表、query 查询工具。 */
+export const INPUT_SOURCE_LABELS = { free: "自由输入", list: "固定候选", query: "查询工具" };
+
+function inputKey() {
+  seq += 1;
+  return `i${seq}`;
+}
+
+export function newInput(existingNames = []) {
+  const names = new Set(existingNames);
+  let n = names.size + 1;
+  while (names.has(`input${n}`)) n += 1;
+  return { key: inputKey(), name: `input${n}`, label: "", source: "free", list: "", uses: "", with: undefined, cwd: "", default: "", allowCustom: false, required: true };
+}
+
+function inputToDraft(input) {
+  const choices = input.choices;
+  const source = Array.isArray(choices) ? "list" : choices && typeof choices === "object" ? "query" : "free";
+  return {
+    key: inputKey(),
+    name: input.name ?? "",
+    label: input.label ?? "",
+    source,
+    list: source === "list" ? choices.join("\n") : "",
+    uses: source === "query" ? choices.uses ?? "" : "",
+    // with 没有表单控件，原样沿用
+    with: source === "query" && choices.with ? { ...choices.with } : undefined,
+    cwd: source === "query" ? choices.cwd ?? "" : "",
+    default: input.default ?? "",
+    allowCustom: input.allowCustom === true,
+    required: input.required !== false,
+  };
+}
+
+function listItems(text) {
+  return String(text ?? "").split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
+}
+
+function inputToDef(input) {
+  const def = { name: input.name.trim() };
+  if (input.label.trim()) def.label = input.label.trim();
+  if (input.source === "list") def.choices = listItems(input.list);
+  if (input.source === "query") {
+    def.choices = { uses: input.uses.trim(), ...(input.with ? { with: input.with } : {}), ...(input.cwd.trim() ? { cwd: input.cwd.trim() } : {}) };
+  }
+  if (input.default.trim()) def.default = input.default.trim();
+  if (input.source !== "free" && input.allowCustom) def.allowCustom = true;
+  if (!input.required) def.required = false;
+  return def;
+}
+
 export function toDraft(id, target) {
   return {
     id,
@@ -77,6 +130,7 @@ export function toDraft(id, target) {
     deadline: target.deadline ?? "",
     template: target.template ?? "",
     steps: (target.steps ?? []).map(stepToDraft),
+    inputs: (target.inputs ?? []).map(inputToDraft),
   };
 }
 
@@ -106,6 +160,7 @@ export function newDraft(existingIds) {
     deadline: "",
     template: "",
     steps: [newStep("uses")],
+    inputs: [],
   };
 }
 
@@ -175,7 +230,7 @@ function stepToDef(step, tools) {
   }
 }
 
-const OPTIONAL_KEYS = ["schedule", "oncePerDay", "deadline", "offlineTtl", "approvalTtl", "template", "steps"];
+const OPTIONAL_KEYS = ["schedule", "oncePerDay", "deadline", "offlineTtl", "approvalTtl", "template", "steps", "inputs"];
 
 export function toDef(draft, previous, context = {}) {
   const def = { ...(previous ?? {}) };
@@ -201,6 +256,8 @@ export function toDef(draft, previous, context = {}) {
   }
   if (draft.steps.length === 0 && draft.template) def.template = draft.template;
   else def.steps = draft.steps.map((step) => stepToDef(step, context.tools));
+  const inputs = draft.inputs ?? [];
+  if (inputs.length) def.inputs = inputs.map(inputToDef);
   if (!def.vars) def.vars = {};
   return def;
 }
@@ -266,6 +323,25 @@ export function validateDraft(draft, { tools = new Map(), timezone } = {}) {
   for (const [label, value] of durations) {
     if (!DURATION_RE.test(value)) errors.push(`${label}要写成 30s、10m、1h 这种格式`);
   }
+  const names = new Set();
+  (draft.inputs ?? []).forEach((input, index) => {
+    const where = `第 ${index + 1} 个输入`;
+    const name = input.name.trim();
+    if (!INPUT_NAME_RE.test(name)) errors.push(`${where}的名字要以字母或下划线开头，只含字母、数字、下划线`);
+    else if (names.has(name)) errors.push(`${where}的名字 ${name} 重复`);
+    names.add(name);
+    if (input.source === "list" && listItems(input.list).length === 0) errors.push(`${where}还没填候选项`);
+    if (input.source === "query") {
+      if (!/^[^/\s]+\/[^/\s]+$/.test(input.uses.trim())) errors.push(`${where}要选一个查询工具`);
+      else {
+        const tool = tools.get(input.uses.trim());
+        if (tool && tool.kind !== "query") errors.push(`${where}的 ${input.uses.trim()} 不是查询工具`);
+      }
+    }
+    if (draft.schedule.trim() && input.required && (!input.default.trim() || input.default.trim() === "last")) {
+      errors.push(`${where}「${input.label.trim() || name}」必填，定时运行需要固定的默认值（不能用 last）`);
+    }
+  });
   const schedule = draft.schedule.trim();
   if (schedule && !isValidCron(schedule, timezone)) errors.push("定时表达式无效，需要 5 段（分 时 日 月 周）");
   if (schedule && draft.deadline.trim() && !TIME_RE.test(draft.deadline.trim())) errors.push("硬截止要写成 HH:mm，例如 08:00");

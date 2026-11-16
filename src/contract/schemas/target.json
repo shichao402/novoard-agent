@@ -41,6 +41,11 @@
           "type": "object",
           "additionalProperties": { "type": ["string", "number", "boolean"] }
         },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/input" },
+          "description": "点击时由用户选定的运行时参数（ADR-0020，契约 v2.6）。选定值按 name 并入 vars"
+        },
         "expose": { "enum": ["a2a", "local"] },
         "audit": { "enum": ["none", "summary", "full"] },
         "requiresApproval": { "type": "boolean" },
@@ -81,6 +86,47 @@
           "default": "10m",
           "description": "requiresApproval 时 input-required 的等待上限，到期转 canceled"
         }
+      },
+      "additionalProperties": false
+    },
+    "input": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "并入 vars 的变量名，不得与 target vars 重名"
+        },
+        "label": { "type": "string", "description": "选择框里显示的名称，缺省用 name" },
+        "choices": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            {
+              "type": "object",
+              "required": ["uses"],
+              "properties": {
+                "uses": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9-]*/[a-z][a-z0-9-]*$",
+                  "description": "kind 为 query 的能力包工具"
+                },
+                "with": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": ["string", "number", "boolean", "array"],
+                    "items": { "type": "string" }
+                  }
+                },
+                "cwd": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "default": { "type": "string", "description": "缺省值；\"last\" 表示上次选定的值" },
+        "allowCustom": { "type": "boolean", "default": false, "description": "允许输入候选项以外的值" },
+        "required": { "type": "boolean", "default": true }
       },
       "additionalProperties": false
     },

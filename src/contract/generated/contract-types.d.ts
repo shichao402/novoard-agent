@@ -193,6 +193,26 @@ export type Target = {
 
 export type TargetDefTarget = { "steps": unknown } | { "template": unknown };
 
+export type TargetDefInput = {
+  /** 并入 vars 的变量名，不得与 target vars 重名 */
+  "name": string;
+  /** 选择框里显示的名称，缺省用 name */
+  "label"?: string;
+  "choices"?: string[] | {
+    /** kind 为 query 的能力包工具 */
+    "uses": string;
+    "with"?: {
+      [key: string]: string | number | boolean | string[];
+    };
+    "cwd"?: string;
+  };
+  /** 缺省值；"last" 表示上次选定的值 */
+  "default"?: string;
+  /** 允许输入候选项以外的值 */
+  "allowCustom"?: boolean;
+  "required"?: boolean;
+};
+
 export type TargetDefStep = TargetDefStepScript | TargetDefStepOpenApp | TargetDefStepOpenPath | TargetDefStepTemplate | TargetDefStepUses;
 
 export type TargetDefStepScript = {

@@ -76,6 +76,30 @@ description: 在这台 ${edition.productName} 的本机会话里自己动手：�
 
 要跑某个 Target 时调用 \`novoard_run_target\`，传入 Target id。它只会向本机 \`/a2a\` 发 \`message/send\`。不要用 Bash 直接跑 Target 里的命令或包里的工具来代替这次调用。
 
+Target 声明了 \`inputs\`（\`novoard_status\` 里 \`inputs: true\`）时，先 \`novoard_target_inputs\` 看要哪些值和候选项，用户没说清的用 AskUserQuestion 让他从候选里挑，再 \`novoard_run_target\` 带 \`vars: { 输入名: 值 }\`。必填项没给又没有默认值，执行会当场失败并写明缺哪个。候选查询出错时（返回带 \`error\`），把原因告诉用户，请他直接给值。
+
+写 Target 时可以加 \`inputs\`，让同一个 Target 点击时再挑对象：每项 \`name\`（与 \`{{name}}\` 对应，不能和 vars 重名）、\`label\`、\`choices\`（字符串数组，或 \`{ "uses": "<包>/<查询工具>", "with": {...} }\`，查询工具在 \`novoard_pack_tools\` 里标 \`kind: "query"\`，不能当步骤用）、\`default\`（可写 \`last\` 取上次的值）、\`allowCustom\`、\`required\`。带 schedule 的 Target，必填输入要有固定的 default，不能用 last。
+
+## 工作副本池（workingCopyPool 包）
+
+一个 SVN 仓库按分支在本机维持几份工作副本（槽位）。用户只说「开 xxx 分支」，池负责复用、切换、稀疏检出和存档改动。
+
+- 池根是一个目录，里面放 \`pool.toml\`。池工具步骤的 \`cwd\` 一律写池根；没有 pool.toml 时工具报用法错误，先和用户确认池根位置并写好 pool.toml：\`maxSlots\`、\`svnRoot\` 必填；\`defaultTtl\`、\`resident\`（常驻分支数组）、\`[branches] pattern / listFrom（目录数组，如 ["branches"]）/ recentDays\`、\`[aliases]\`、\`[sparse] exclude\`、\`patchRetentionDays\` 可选。\`pattern\` 必须含 \`{name}\`，可带后缀，如 \`branches/{name}/GameCore\` 只检出分支下的 GameCore。
+- 分支的固定入口是 \`<池根>/branch/<分支>\`。后续步骤的 cwd、projectPath 写成 \`{{poolRoot}}/branch/{{branch}}\`（poolRoot 放在 Target 的 vars 里），不要写 slot-N 槽位目录，槽位会被复用。
+- 查询工具 \`candidates\`（开分支的候选）、\`occupied\`（正在占用的分支）、\`status\`（池状态）只用于 inputs 的 choices，不能当步骤。choices 里也要写 \`cwd\` 指向池根，如 \`{ "uses": "workingCopyPool/candidates", "cwd": "{{poolRoot}}" }\`。
+- 动作工具：\`acquire\`（branch 必填；ttl 如 \`12h\`、\`3d\`、\`forever\`；tag 选填）、\`release\`（只清租约不动文件）、\`refresh\`（常驻分支更新到最新）、\`gc\`（中断恢复、缩容、清过期存档）。
+- 池满，或槽位有冲突、svn 锁时，acquire 失败并列出各槽位的分支、标签、租约。原样转告用户，让他决定释放哪个；不要自己删目录或 revert。
+- 切换或回收前，受控文件的改动会存档成 patch 并 revert，存档路径写在运行日志里，告诉用户即可。未纳管文件只记清单、不删除，会留在槽位里带到下一个分支。
+
+典型 Target（工具 id 与参数以 \`novoard_pack_tools\` 为准）：
+
+1. 开分支：inputs 一项 \`branch\`，\`choices: { "uses": "workingCopyPool/candidates", "cwd": "{{poolRoot}}" }\`，\`allowCustom: true\`，\`default: last\`；步骤 \`workingCopyPool/acquire\`（\`with: { branch: "{{branch}}" }\`），需要时接 \`general/unity-open\`（\`projectPath\` 指向分支入口下的 Unity 工程目录）。
+2. 固定开工（如每天早上开常驻分支）：acquire → \`general/release-occupants\`（仅 Windows）→ \`versionControl/svn-update\` → \`general/unity-open\`。带 schedule 的 branch 用固定值，不用 last。
+3. 释放：inputs 的 choices 用 \`workingCopyPool/occupied\`（同样带 cwd），步骤 \`workingCopyPool/release\`。
+4. 夜间维护：\`workingCopyPool/gc\` → \`workingCopyPool/refresh\`，配 schedule 和 deadline。
+
+\`general/unity-open\` 只负责把 Unity 拉起来，启动后立刻返回成功，不等编辑器加载完。后面不要加等待步骤。
+
 需要确认的 Target，先告诉用户会执行什么，得到同意后再调用。跑完用 \`novoard_recent_activity\` 或 \`novoard_tail_logs\` 看结果。缺包、依赖没装好这类问题，日志和 \`novoard_list_packs\` 会写明原因，按原因处理（装包、更新包、请用户补凭据）。
 
 ## 向用户提问

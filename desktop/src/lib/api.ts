@@ -35,6 +35,33 @@ export type Tile = {
   schedule?: string;
   nextRun?: string | null;
   lastScheduled?: { status: string; trigger?: string; slot?: string; at?: number; taskId?: string | null } | null;
+  /** 带运行时输入（ADR-0020）：点击先弹选择框。 */
+  inputs?: boolean;
+};
+
+/** target 的运行时输入定义（ADR-0020 §1）。choices 为静态列表或查询工具。 */
+export type TargetInput = {
+  name: string;
+  label?: string;
+  choices?: string[] | { uses: string; with?: Record<string, string | number | boolean | string[]>; cwd?: string };
+  default?: string;
+  allowCustom?: boolean;
+  required?: boolean;
+};
+
+export type InputChoice = { value: string; label?: string; hint?: string };
+
+/** 选择框用的单个输入：候选项已现场查好，default 已解析（last 回显上次值）。 */
+export type InputDescription = {
+  name: string;
+  label: string;
+  required: boolean;
+  allowCustom: boolean;
+  dynamic: boolean;
+  default: string;
+  choices: InputChoice[];
+  /** 查询失败原因；此时 choices 为空且允许自由输入。 */
+  error?: string;
 };
 
 export type ScheduleInfo = { enabled: boolean; timezone: string };
@@ -64,6 +91,7 @@ export type TargetDef = {
   timeout?: string;
   lostTtl?: string;
   approvalTtl?: string;
+  inputs?: TargetInput[];
 };
 
 export function apiBase(endpoint: Endpoint | null) {
@@ -171,6 +199,8 @@ export type ToolParam = {
 export type PackTool = {
   id: string;
   displayName: string;
+  /** query 只能当 inputs 的候选来源，不能作步骤（ADR-0020 §3）。 */
+  kind?: "action" | "query";
   description?: string;
   remoteWrite: boolean;
   platforms?: string[];
@@ -207,14 +237,21 @@ export function packAction(base: string, id: string, action: "install" | "update
     : request<{ ok: boolean; reason?: string; version?: string | null; patch?: string }>(base, `/api/packs/${encodeURIComponent(id)}/${action}`, { method: "POST", body: "{}" });
 }
 
-export function runTarget(base: string, id: string) {
-  return request<{ result?: { id: string; status?: { state?: string } }; error?: { message?: string } }>(base, "/a2a", {
+export function getTargetInputs(base: string, id: string) {
+  return request<{ ok: boolean; id: string; title: string; inputs: InputDescription[] }>(base, `/api/targets/${encodeURIComponent(id)}/inputs`);
+}
+
+/** vars 为运行时输入的取值，作为 data part 传给本机 A2A。 */
+export function runTarget(base: string, id: string, vars?: Record<string, string>) {
+  const parts: Array<Record<string, unknown>> = [{ kind: "text", text: id }];
+  if (vars && Object.keys(vars).length > 0) parts.push({ kind: "data", data: vars });
+  return request<{ result?: { id: string; status?: { state?: string; message?: string } }; error?: { message?: string } }>(base, "/a2a", {
     method: "POST",
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: crypto.randomUUID(),
       method: "message/send",
-      params: { message: { parts: [{ kind: "text", text: id }] } },
+      params: { message: { parts } },
     }),
   });
 }

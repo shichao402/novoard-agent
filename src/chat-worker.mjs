@@ -112,6 +112,7 @@ function sessionOptions(sdk, holder) {
       "mcp__novoard__novoard_upsert_target",
       "mcp__novoard__novoard_delete_target",
       "mcp__novoard__novoard_run_target",
+      "mcp__novoard__novoard_target_inputs",
       "mcp__novoard__novoard_ask_member",
       "mcp__novoard__novoard_request_detail",
       "mcp__novoard__novoard_report_result",
@@ -156,8 +157,12 @@ function toolDefs(sdk) {
     ["novoard_delete_target", "删除一个 Target", {
       id: z.string().describe("Target id"),
     }],
+    ["novoard_target_inputs", "读取一个 Target 的运行时输入：每项的名字、是否必填、默认值和现场查询的候选项", {
+      id: z.string().describe("Target id"),
+    }],
     ["novoard_run_target", "通过本机 A2A message/send 执行一个 Target", {
       id: z.string().describe("Target id"),
+      vars: z.record(z.string(), z.string()).optional().describe("运行时输入的取值，键为输入名；Target 声明了 inputs 时用"),
       forPeer: z.boolean().optional().describe("这次是替其他成员做的，完成后要向对方报告"),
     }],
     ["novoard_ask_member", "向另一个成员发自然语言，不指定 Target", {
