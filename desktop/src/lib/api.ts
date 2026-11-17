@@ -397,6 +397,8 @@ export type CodebuddySettings = {
   model: string;
   environment: "internal" | "external" | "ioa" | "cloudhosted";
   hasApiKey: boolean;
+  apiKeySource?: "" | "panel" | "env" | "dec";
+  effectiveEnvironment?: "internal" | "external" | "ioa" | "cloudhosted";
 };
 
 export function getCodebuddy(base: string) {
@@ -405,7 +407,7 @@ export function getCodebuddy(base: string) {
 
 export function saveCodebuddy(
   base: string,
-  input: { model: string; environment: CodebuddySettings["environment"]; apiKey?: string },
+  input: { model: string; environment: CodebuddySettings["environment"]; apiKey?: string; clearApiKey?: boolean },
 ) {
   return request<CodebuddySettings>(base, "/api/codebuddy", { method: "PUT", body: JSON.stringify(input) });
 }

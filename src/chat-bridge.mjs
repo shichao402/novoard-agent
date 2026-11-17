@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readCodebuddyConfig, codebuddyProcessEnv } from "./codebuddy-config.mjs";
+import { readCodebuddyConfig, resolveCodebuddyConfig, codebuddyProcessEnv } from "./codebuddy-config.mjs";
 import { edition } from "./edition.mjs";
 
 function moduleDir() {
@@ -55,7 +55,7 @@ export function locateNode(env = process.env, options = {}) {
   return null;
 }
 
-export function createChatBridge({ dataDir, codebuddyFile, workerPath, nodePath, log = console } = {}) {
+export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPath, nodePath, log = console } = {}) {
   if (!dataDir) throw new Error("createChatBridge 需要 dataDir");
   const sessionDir = join(dataDir, "sessions");
   const agentHome = join(dataDir, "agent-home");
@@ -116,8 +116,9 @@ export function createChatBridge({ dataDir, codebuddyFile, workerPath, nodePath,
       if (!worker) throw new Error(`没有找到会话程序。重新安装 ${edition.productName} 后再试。`);
       if (!origin) throw new Error("本机 Agent 还没准备好。");
       const script = plainWindowsPath(worker);
-      const configured = codebuddyFile ? readCodebuddyConfig(codebuddyFile) : { model: "", apiKey: "", environment: "internal" };
-      log.info?.(`[chat] 启动 node=${node} worker=${script} type=${configured.environment} model=${configured.model || "默认"}`);
+      const panel = codebuddyFile ? readCodebuddyConfig(codebuddyFile) : { model: "", apiKey: "", environment: "internal" };
+      const configured = resolveCodebuddyConfig(panel, { env: process.env, ...(decEnvFile ? { decFile: decEnvFile } : {}) });
+      log.info?.(`[chat] 启动 node=${node} worker=${script} type=${configured.environment} model=${configured.model || "默认"} key=${configured.apiKeySource || "无"}`);
       const proc = spawn(node, [script], {
         stdio: ["pipe", "pipe", "pipe"],
         env: codebuddyProcessEnv(configured, {

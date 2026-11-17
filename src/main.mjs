@@ -29,7 +29,7 @@ import { createTargetsStore } from "./targets-store.mjs";
 import { persistAgentConfig, testConnection } from "./setup-wizard.mjs";
 import { createChatBridge } from "./chat-bridge.mjs";
 import { acquireInstanceLock } from "./instance-lock.mjs";
-import { publicCodebuddyConfig, readCodebuddyConfig, saveCodebuddyConfig } from "./codebuddy-config.mjs";
+import { publicCodebuddyConfig, readCodebuddyConfig, resolveCodebuddyConfig, saveCodebuddyConfig } from "./codebuddy-config.mjs";
 
 const HERE = moduleHere();
 
@@ -255,11 +255,15 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     logFile: log.file || join(dirname(state), "logs", "agent.jsonl"),
     shortcutLogDir: join(dirname(log.file || join(dirname(state), "logs", "agent.jsonl")), "shortcuts"),
     codebuddy: {
-      read: () => publicCodebuddyConfig(readCodebuddyConfig(codebuddyFile)),
+      read: () => {
+        const panel = readCodebuddyConfig(codebuddyFile);
+        return publicCodebuddyConfig(panel, resolveCodebuddyConfig(panel));
+      },
       save: (input) => {
         const saved = saveCodebuddyConfig(codebuddyFile, input);
-        log.info?.(`[codebuddy] 已保存类型 ${saved.environment}，模型 ${saved.model || "默认"}`);
-        return { ok: true, public: publicCodebuddyConfig(saved) };
+        const resolved = resolveCodebuddyConfig(saved);
+        log.info?.(`[codebuddy] 已保存类型 ${saved.environment}，模型 ${saved.model || "默认"}，密钥来源 ${resolved.apiKeySource || "无"}`);
+        return { ok: true, public: publicCodebuddyConfig(saved, resolved) };
       },
     },
     chat,

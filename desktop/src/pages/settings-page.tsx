@@ -8,6 +8,19 @@ import { UpdateSection } from "@/components/update-section";
 import { getCodebuddy, getProfile, getSettings, saveCodebuddy, saveProfile, saveSettings, testHub, type CodebuddySettings } from "@/lib/api";
 import { hubLabel } from "@/lib/utils";
 
+function apiKeyHint(source: NonNullable<CodebuddySettings["apiKeySource"]>) {
+  switch (source) {
+    case "panel":
+      return "正在使用本机保存的密钥，优先于 Dec 下发和环境变量。留空表示不更换。";
+    case "env":
+      return "正在使用环境变量 CODEBUDDY_API_KEY。在这里填写会改用本机密钥。";
+    case "dec":
+      return "正在使用 Dec 下发的密钥（~/.dec/env/novoard-agent.codebuddy.env）。在这里填写只覆盖这台机器。";
+    default:
+      return "没有密钥时，会话会要求先登录 CodeBuddy。也可以通过 Dec 下发 novoard-agent.codebuddy.env。";
+  }
+}
+
 export function SettingsPage({ base, onRestart }: { base: string; onRestart: () => void }) {
   const [hubUrl, setHubUrl] = useState("");
   const [agentId, setAgentId] = useState("");
@@ -18,6 +31,7 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
   const [environment, setEnvironment] = useState<CodebuddySettings["environment"]>("internal");
   const [apiKey, setApiKey] = useState("");
   const [hasApiKey, setHasApiKey] = useState(false);
+  const [apiKeySource, setApiKeySource] = useState<NonNullable<CodebuddySettings["apiKeySource"]>>("");
   const [status, setStatus] = useState("");
   const [tone, setTone] = useState<"info" | "ok" | "err">("info");
   const [modelStatus, setModelStatus] = useState("");
@@ -47,6 +61,7 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
         setModel(settings.model);
         setEnvironment(settings.environment);
         setHasApiKey(settings.hasApiKey);
+        setApiKeySource(settings.apiKeySource ?? (settings.hasApiKey ? "panel" : ""));
       })
       .catch(() => {
         if (!cancelled) setHasApiKey(false);
@@ -117,16 +132,23 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
     }
   }
 
-  async function saveModel() {
+  async function saveModel(clearApiKey = false) {
     setBusy(true);
     setModelTone("info");
-    setModelStatus("正在保存 CodeBuddy 配置…");
+    setModelStatus(clearApiKey ? "正在清除本机密钥…" : "正在保存 CodeBuddy 配置…");
     try {
-      const saved = await saveCodebuddy(base, { model, environment, ...(apiKey ? { apiKey } : {}) });
+      const saved = await saveCodebuddy(base, { model, environment, ...(clearApiKey ? { clearApiKey: true } : apiKey ? { apiKey } : {}) });
       setApiKey("");
       setHasApiKey(saved.hasApiKey);
+      setApiKeySource(saved.apiKeySource ?? (saved.hasApiKey ? "panel" : ""));
       setModelTone("ok");
-      setModelStatus("已保存。之后新建或继续的对话会使用这个模型、密钥和类型。");
+      setModelStatus(clearApiKey
+        ? saved.apiKeySource === "dec"
+          ? "已清除本机密钥，之后的对话改用 Dec 下发的密钥。"
+          : saved.apiKeySource === "env"
+            ? "已清除本机密钥，之后的对话改用环境变量 CODEBUDDY_API_KEY。"
+            : "已清除本机密钥。本机也没有 Dec 下发或环境变量里的密钥，会话会要求先登录 CodeBuddy。"
+        : "已保存。之后新建或继续的对话会使用这个模型、密钥和类型。");
     } catch (caught) {
       setModelTone("err");
       setModelStatus(caught instanceof Error ? caught.message : "保存失败");
@@ -182,10 +204,13 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
         <Field label="默认模型" hint="留空则使用账号自己的默认模型。">
           <Input value={model} onChange={(event) => setModel(event.target.value)} placeholder="例如 hy4-preview" spellCheck={false} />
         </Field>
-        <Field label="API Key" hint={hasApiKey ? "已保存密钥。留空表示不更换。" : "没有密钥时，会话会要求先登录 CodeBuddy。"}>
+        <Field label="API Key" hint={apiKeyHint(apiKeySource)}>
           <Input value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" placeholder={hasApiKey ? "留空则不修改" : "粘贴 API Key"} spellCheck={false} />
         </Field>
-        <Button variant="accent" disabled={busy} onClick={() => void saveModel()}>保存模型配置</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="accent" disabled={busy} onClick={() => void saveModel()}>保存模型配置</Button>
+          {hasApiKey ? <Button disabled={busy} onClick={() => void saveModel(true)}>清除本机密钥</Button> : null}
+        </div>
         {modelStatus ? <p className={`text-xs leading-5 ${modelTone === "ok" ? "text-good" : modelTone === "err" ? "text-bad" : "text-muted"}`}>{modelStatus}</p> : null}
       </section>
       <GitCredentialsSection base={base} />
