@@ -338,12 +338,61 @@ test("执行记录从审计文件读出，重启后还在", async () => {
 
 test("会话工具声明、白名单与实现一一对应", async () => {
   const { readFileSync } = await import("node:fs");
+  const { NOVOARD_MCP_TOOLS } = await import("../src/chat-permissions.mjs");
   const worker = readFileSync(new URL("../src/chat-worker.mjs", import.meta.url), "utf8");
   const tools = readFileSync(new URL("../src/novoard-tools.mjs", import.meta.url), "utf8");
   const declared = [...worker.matchAll(/^\s*\["(novoard_[a-z_]+)",/gm)].map((m) => m[1]).sort();
-  const allowed = [...worker.matchAll(/"mcp__novoard__(novoard_[a-z_]+)"/g)].map((m) => m[1]).sort();
+  const allowed = NOVOARD_MCP_TOOLS.map((name) => name.replace(/^mcp__novoard__/, "")).sort();
   const handled = [...tools.matchAll(/name === "(novoard_[a-z_]+)"/g)].map((m) => m[1]).sort();
   assert.ok(declared.length >= 20);
   assert.deepEqual(allowed, declared);
   assert.deepEqual(handled, declared);
+  assert.match(worker, /allowedTools: \[\.\.\.NOVOARD_MCP_TOOLS, \.\.\.BUILTIN_ALLOWED_TOOLS\]/);
+  assert.match(worker, /disallowedTools: BUILTIN_DISALLOWED_TOOLS/);
+});
+
+test("内置工具白名单只放行只读命令和 pool.toml，任务类工具被禁用", async () => {
+  const { BUILTIN_ALLOWED_TOOLS, BUILTIN_DISALLOWED_TOOLS } = await import("../src/chat-permissions.mjs");
+  for (const name of ["Read", "Glob", "Grep", "Bash(svn info:*)", "PowerShell(Get-ChildItem:*)", "Write(**/pool.toml)"]) {
+    assert.ok(BUILTIN_ALLOWED_TOOLS.includes(name), `应放行 ${name}`);
+  }
+  // 不带限定的执行类工具一放行就等于全开
+  for (const name of ["Bash", "PowerShell", "Write", "Edit", "MultiEdit", "AskUserQuestion"]) {
+    assert.ok(!BUILTIN_ALLOWED_TOOLS.includes(name), `不应整体放行 ${name}`);
+  }
+  const writes = /\b(update|commit|revert|cleanup|checkout|switch|reset|push|pull|merge|rm|del|Remove-Item|Set-Content|Out-File|Move-Item|Copy-Item|Start-Process)\b/i;
+  for (const rule of BUILTIN_ALLOWED_TOOLS.filter((name) => /^(Bash|PowerShell)\(/.test(name))) {
+    assert.match(rule, /:\*\)$/, `${rule} 应为前缀规则`);
+    assert.doesNotMatch(rule, writes, `${rule} 不应是写操作`);
+  }
+  for (const name of ["TaskCreate", "TaskUpdate", "EnterPlanMode", "Agent"]) {
+    assert.ok(BUILTIN_DISALLOWED_TOOLS.includes(name), `应禁用 ${name}`);
+  }
+});
+
+test("会话运行时打包清单包含 worker 依赖的全部本地模块", async () => {
+  const { readFileSync } = await import("node:fs");
+  const stage = readFileSync(new URL("../scripts/stage-agent-runtime.mjs", import.meta.url), "utf8");
+  const files = JSON.parse(stage.match(/const FILES = (\[[^\]]+\])/)[1]);
+  const seen = new Set();
+  const queue = ["chat-worker.mjs"];
+  while (queue.length) {
+    const file = queue.shift();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const text = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+    for (const m of text.matchAll(/from "\.\/([a-z0-9.-]+\.mjs)"/g)) queue.push(m[1]);
+  }
+  for (const file of seen) assert.ok(files.includes(file), `打包清单缺 ${file}`);
+});
+
+test("本机会话被拒工具时停下来问用户", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { NOVOARD_SKILL } = await import("../src/novoard-skill.mjs");
+  const worker = readFileSync(new URL("../src/chat-worker.mjs", import.meta.url), "utf8");
+  assert.match(NOVOARD_SKILL, /## 工具权限/);
+  assert.match(NOVOARD_SKILL, /工具被拒时/);
+  assert.match(NOVOARD_SKILL, /不要换个工具或换个写法绕过去/);
+  assert.match(worker, /被拒后不要换工具绕过、不要排后续计划/);
+  assert.match(worker, /不要让用户去改白名单或权限设置/);
 });

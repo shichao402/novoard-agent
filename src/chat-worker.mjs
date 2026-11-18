@@ -20,6 +20,7 @@ import { dispatchNovoardTool } from "./novoard-tools.mjs";
 import { createAskGate, formatAnswers, normalizeQuestions } from "./ask-user.mjs";
 import { codebuddySessionFields } from "./codebuddy-config.mjs";
 import { NOVOARD_SKILL, NOVOARD_SKILL_NAME, NOVOARD_SKILL_LEGACY_NAMES } from "./novoard-skill.mjs";
+import { BUILTIN_ALLOWED_TOOLS, BUILTIN_DISALLOWED_TOOLS, NOVOARD_MCP_TOOLS } from "./chat-permissions.mjs";
 import { edition } from "./edition.mjs";
 
 const origin = process.env.NOVOARD_LOCAL_ORIGIN || "";
@@ -104,31 +105,15 @@ function sessionOptions(sdk, holder) {
     includePartialMessages: true,
     sessionId: holder.id || undefined,
     mcpServers: { novoard: server },
-    allowedTools: [
-      "mcp__novoard__novoard_status",
-      "mcp__novoard__novoard_list_targets",
-      "mcp__novoard__novoard_get_settings",
-      "mcp__novoard__novoard_save_settings",
-      "mcp__novoard__novoard_upsert_target",
-      "mcp__novoard__novoard_delete_target",
-      "mcp__novoard__novoard_run_target",
-      "mcp__novoard__novoard_target_inputs",
-      "mcp__novoard__novoard_ask_member",
-      "mcp__novoard__novoard_request_detail",
-      "mcp__novoard__novoard_report_result",
-      "mcp__novoard__novoard_signal_presence",
-      "mcp__novoard__novoard_notify_owner",
-      "mcp__novoard__novoard_recent_activity",
-      "mcp__novoard__novoard_tail_logs",
-      "mcp__novoard__novoard_list_packs",
-      "mcp__novoard__novoard_pack_tools",
-      "mcp__novoard__novoard_install_pack",
-      "mcp__novoard__novoard_get_schedule",
-      "mcp__novoard__novoard_set_schedule",
-      "mcp__novoard__novoard_schedule_catch_up",
-    ],
+    allowedTools: [...NOVOARD_MCP_TOOLS, ...BUILTIN_ALLOWED_TOOLS],
+    disallowedTools: BUILTIN_DISALLOWED_TOOLS,
     systemPrompt: {
-      append: `你是这台电脑上的 ${edition.productName}。配置、能力包、定时和执行遵循项目 skill ${NOVOARD_SKILL_NAME}。执行 Target 必须走 novoard_run_target，也就是本机 A2A。`,
+      append: [
+        `你是这台电脑上的 ${edition.productName}。配置、能力包、定时和执行遵循项目 skill ${NOVOARD_SKILL_NAME}。执行 Target 必须走 novoard_run_target，也就是本机 A2A。`,
+        "会话不弹授权框，白名单外的工具调用会直接被拒。可直接用的：novoard 全部工具；Read、Glob、Grep；只读命令 svn info/status/ls/list/log、git status/log/remote/rev-parse/branch；PowerShell 的 Get-ChildItem/Test-Path/Get-Item/Get-Content；写文件只能写 pool.toml。看目录优先用 PowerShell 的 Get-ChildItem <目录> -Name 或 Glob，不要用 ls、dir、cat。一条命令只做一件事，不要用 &&、;、管道拼接。",
+        "删除、改文件、svn update/revert 这类改动写成 Target 步骤，用户确认后经 novoard_run_target 执行。",
+        "被拒后不要换工具绕过、不要排后续计划。用一两句中文说明想做什么、被拒的是哪个工具，再用 AskUserQuestion 给出可选做法（写成 Target 由他确认执行 / 他自己手动做 / 换个方案），等他决定。不要让用户去改白名单或权限设置，他在界面上改不了。",
+      ].join("\n"),
     },
     env: sessionEnv(),
     stderr: (chunk) => process.stderr.write(String(chunk)),
