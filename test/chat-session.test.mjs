@@ -154,6 +154,27 @@ test("SDK 消息收成界面事件", () => {
   assert.match(explainAgentError(new Error("CodeBuddy CLI not found")), /没有找到 CodeBuddy/);
 });
 
+test("SDK 顶层 error 消息转成错误事件，恢复不存在的会话可被识别", async () => {
+  const { isMissingConversation } = await import("../src/chat-events.mjs");
+  const missing = { type: "error", error: "No conversation found with session ID: 01a1ee27-fb94-7ab3-b989-e3892f89b19b" };
+  assert.equal(isMissingConversation(missing), true);
+  assert.equal(isMissingConversation({ type: "error", error: "rate limited" }), false);
+  assert.equal(isMissingConversation({ type: "result", subtype: "success" }), false);
+  assert.equal(isMissingConversation(null), false);
+  const events = normalizeSdkMessage({ type: "error", error: "rate limited" });
+  assert.deepEqual(events, [{ kind: "error", text: "rate limited" }]);
+  assert.equal(normalizeSdkMessage({ type: "error" })[0].kind, "error");
+});
+
+test("会话进程发送时遇到会话不存在会用同一 id 重建并重发", async () => {
+  const { readFileSync } = await import("node:fs");
+  const worker = readFileSync(new URL("../src/chat-worker.mjs", import.meta.url), "utf8");
+  // 真实 SDK 无法在单测里替换，这里锁住重建分支的关键调用，防止被误删
+  assert.match(worker, /isMissingConversation\(message\)/);
+  assert.match(worker, /outcome\.missing[\s\S]*recreateSession\(sdk, request\.sessionId\)[\s\S]*session\.send\(text\)/);
+  assert.match(worker, /function recreateSession[\s\S]*openSession\(sdk, id, false\)/);
+});
+
 test("配置工具经本机接口执行，跑 Target 只走 A2A", async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {

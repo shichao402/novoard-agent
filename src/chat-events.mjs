@@ -36,6 +36,10 @@ export function normalizeSdkMessage(message) {
     const text = Array.isArray(message.errors) && message.errors.length ? message.errors.join("\n") : String(message.subtype ?? "执行失败");
     return [{ kind: "done", ok: false, text }];
   }
+  if (message.type === "error") {
+    // CLI 在会话层面失败时（如恢复不存在的会话）只发这一条就结束流，不会再有 result
+    return [{ kind: "error", text: explainAgentError(message.error ?? "执行失败") }];
+  }
   if (message.type === "system" && message.subtype === "init") {
     const mcp = (message.mcp_servers ?? []).map((item) => `${item.name}:${item.status}`).join(", ");
     return [{ kind: "status", text: `已连接 ${message.model || "模型"}${mcp ? ` · MCP ${mcp}` : ""}` }];
@@ -44,6 +48,14 @@ export function normalizeSdkMessage(message) {
     return [{ kind: "status", text: message.description ? `后台任务：${message.description}` : "后台任务已开始" }];
   }
   return [];
+}
+
+/**
+ * CodeBuddy 那边没有这个会话。新建后一条消息都没发就重启会话进程时会这样：
+ * CLI 只在首条消息后才落盘会话，恢复时报 No conversation found。
+ */
+export function isMissingConversation(message) {
+  return Boolean(message && message.type === "error" && /no conversation found/i.test(String(message.error ?? "")));
 }
 
 export function explainAgentError(error) {

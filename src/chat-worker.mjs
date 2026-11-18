@@ -15,7 +15,7 @@ childProcess.spawn = function patchedSpawn(command, args, options = {}) {
   return spawnHidden.call(this, command, args, { ...options, windowsHide: true });
 };
 import { createSessionStore } from "./session-store.mjs";
-import { explainAgentError, normalizeSdkMessage } from "./chat-events.mjs";
+import { explainAgentError, isMissingConversation, normalizeSdkMessage } from "./chat-events.mjs";
 import { dispatchNovoardTool } from "./novoard-tools.mjs";
 import { createAskGate, formatAnswers, normalizeQuestions } from "./ask-user.mjs";
 import { codebuddySessionFields } from "./codebuddy-config.mjs";
@@ -237,7 +237,12 @@ async function openSession(sdk, id, resume) {
 }
 
 async function consume(session, requestId) {
+  let missing = false;
   for await (const message of session.stream()) {
+    if (isMissingConversation(message)) {
+      missing = true;
+      continue;
+    }
     for (const event of normalizeSdkMessage(message)) {
       if (event.kind !== "delta" && !(event.kind === "done" && event.ok)) store.append(session.sessionId, event);
       emit({ id: requestId, event });
@@ -247,6 +252,15 @@ async function consume(session, requestId) {
       }
     }
   }
+  return { missing };
+}
+
+/** 丢掉恢复失败的会话，用同一个 id 新建，界面和本地记录不用换 id。 */
+function recreateSession(sdk, id) {
+  const stale = live.get(id);
+  live.delete(id);
+  try { stale?.close(); } catch { /* 已关闭 */ }
+  return openSession(sdk, id, false);
 }
 
 const rl = createInterface({ input: process.stdin });
@@ -363,7 +377,14 @@ async function handle(request) {
       inflight.set(request.sessionId, id);
       try {
         await session.send(text);
-        await consume(session, id);
+        let outcome = await consume(session, id);
+        if (outcome.missing) {
+          process.stderr.write(`[chat] 会话 ${request.sessionId} 在 CodeBuddy 侧不存在，用同一 id 重建后重发\n`);
+          session = await recreateSession(sdk, request.sessionId);
+          await session.send(text);
+          outcome = await consume(session, id);
+          if (outcome.missing) throw new Error("CodeBuddy 找不到这个会话，重建也没有成功。删除这个对话后新建一个再试。");
+        }
         emit({ id, result: { ok: true, session: store.get(request.sessionId) } });
       } finally {
         inflight.delete(request.sessionId);
