@@ -26,6 +26,38 @@ test("会话可以创建、追加、列出和删除", () => {
   }
 });
 
+test("会话进程以宿主传入的环境为基础，而不是 GUI 进程环境", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "novoard-chat-env-"));
+  const worker = join(dir, "worker.mjs");
+  writeFileSync(worker, [
+    'import { createInterface } from "node:readline";',
+    'createInterface({ input: process.stdin }).on("line", (line) => {',
+    "  const msg = JSON.parse(line);",
+    "  const result = { mark: process.env.NOVOARD_TEST_MARK ?? null, key: process.env.CODEBUDDY_API_KEY ?? null };",
+    '  process.stdout.write(JSON.stringify({ id: msg.id, result }) + "\\n");',
+    "});",
+  ].join("\n"));
+  const env = { ...process.env, NOVOARD_TEST_MARK: "from-login-shell", CODEBUDDY_API_KEY: "ck_from_shell" };
+  delete env.NOVOARD_NODE;
+  const bridge = createChatBridge({
+    dataDir: dir,
+    workerPath: worker,
+    decEnvFile: join(dir, "missing.env"),
+    env,
+    log: {},
+  });
+  try {
+    assert.equal(process.env.NOVOARD_TEST_MARK, undefined);
+    bridge.setOrigin("http://127.0.0.1:1");
+    const result = await bridge.list();
+    assert.equal(result.mark, "from-login-shell");
+    assert.equal(result.key, "ck_from_shell");
+  } finally {
+    bridge.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("打包后的 Agent 从 PATH 找 Node，跳过 WindowsApps 目录", () => {
   const dir = mkdtempSync(join(tmpdir(), "novoard-node-"));
   try {

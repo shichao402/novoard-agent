@@ -55,7 +55,11 @@ export function locateNode(env = process.env, options = {}) {
   return null;
 }
 
-export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPath, nodePath, log = console } = {}) {
+/**
+ * env 是会话进程的基础环境。GUI 拉起时进程 PATH 只有系统目录，找不到 Homebrew 等装的 Node，
+ * 所以宿主应传入与 target 脚本相同的登录 shell 环境（resolveScriptEnv）；不传时沿用进程环境。
+ */
+export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPath, nodePath, env = process.env, log = console } = {}) {
   if (!dataDir) throw new Error("createChatBridge 需要 dataDir");
   const sessionDir = join(dataDir, "sessions");
   const agentHome = join(dataDir, "agent-home");
@@ -110,19 +114,19 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
     if (child) return Promise.resolve(child);
     if (starting) return starting;
     starting = Promise.resolve().then(() => {
-      const node = nodePath || locateNode();
+      const node = nodePath || locateNode(env);
       const worker = workerPath || locateChatWorker();
       if (!node) throw new Error("没有找到系统 Node，无法启动模型会话。安装 Node.js 22 或更新版本后再试。");
       if (!worker) throw new Error(`没有找到会话程序。重新安装 ${edition.productName} 后再试。`);
       if (!origin) throw new Error("本机 Agent 还没准备好。");
       const script = plainWindowsPath(worker);
       const panel = codebuddyFile ? readCodebuddyConfig(codebuddyFile) : { model: "", apiKey: "", environment: "internal" };
-      const configured = resolveCodebuddyConfig(panel, { env: process.env, ...(decEnvFile ? { decFile: decEnvFile } : {}) });
+      const configured = resolveCodebuddyConfig(panel, { env, ...(decEnvFile ? { decFile: decEnvFile } : {}) });
       log.info?.(`[chat] 启动 node=${node} worker=${script} type=${configured.environment} model=${configured.model || "默认"} key=${configured.apiKeySource || "无"}`);
       const proc = spawn(node, [script], {
         stdio: ["pipe", "pipe", "pipe"],
         env: codebuddyProcessEnv(configured, {
-          ...process.env,
+          ...env,
           NOVOARD_LOCAL_ORIGIN: origin,
           NOVOARD_SESSION_DIR: sessionDir,
           NOVOARD_AGENT_HOME: agentHome,

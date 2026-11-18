@@ -212,7 +212,8 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   const codebuddyFile = join(dirname(state), "codebuddy.json");
   /** 调度器在 localA2A 之后创建；控制台定时接口经此引用访问，启动完成前返回未就绪。 */
   const scheduleRef = { current: null };
-  const chat = createChatBridge({ dataDir: state, codebuddyFile, log });
+  // 会话进程与 target 脚本用同一个环境：GUI 拉起时进程 PATH 没有 /usr/local/bin、/opt/homebrew/bin，找不到 Node
+  const chat = createChatBridge({ dataDir: state, codebuddyFile, env: scriptEnv.env, log });
   const localA2A = createLocalA2A({
     port: Number(config.localPort ?? 0),
     host: config.uiHost,
