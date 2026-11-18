@@ -58,6 +58,58 @@ test("会话进程以宿主传入的环境为基础，而不是 GUI 进程环境
   }
 });
 
+test("新建会话前发现 key 变了就重启会话进程，有请求进行中时不重启", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "novoard-chat-rotate-"));
+  const worker = join(dir, "worker.mjs");
+  writeFileSync(worker, [
+    'import { createInterface } from "node:readline";',
+    'createInterface({ input: process.stdin }).on("line", (line) => {',
+    "  const msg = JSON.parse(line);",
+    '  if (msg.op === "send") return;',
+    "  const result = { pid: process.pid, key: process.env.CODEBUDDY_API_KEY ?? null };",
+    '  process.stdout.write(JSON.stringify({ id: msg.id, result }) + "\\n");',
+    "});",
+  ].join("\n"));
+  const decFile = join(dir, "novoard-agent.codebuddy.env");
+  writeFileSync(decFile, "CODEBUDDY_API_KEY=ck_old\n");
+  const env = { ...process.env };
+  delete env.CODEBUDDY_API_KEY;
+  delete env.NOVOARD_NODE;
+  const logs = [];
+  const bridge = createChatBridge({
+    dataDir: dir,
+    workerPath: worker,
+    decEnvFile: decFile,
+    env,
+    log: { info: (m) => logs.push(m) },
+  });
+  try {
+    bridge.setOrigin("http://127.0.0.1:1");
+    const first = await bridge.create("a");
+    assert.equal(first.key, "ck_old");
+    assert.equal((await bridge.create("b")).pid, first.pid, "key 没变时复用会话进程");
+
+    writeFileSync(decFile, "CODEBUDDY_API_KEY=ck_new\n");
+    const rotated = await bridge.create("c");
+    assert.notEqual(rotated.pid, first.pid, "key 变了应重启会话进程");
+    assert.equal(rotated.key, "ck_new");
+    assert.ok(logs.some((m) => m.includes("模型配置已变化")));
+    assert.ok(logs.every((m) => !m.includes("ck_new")), "日志里不能出现 key 明文");
+
+    const inflight = bridge.send("s1", "hi").catch(() => "rejected");
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(decFile, "CODEBUDDY_API_KEY=ck_third\n");
+    const busy = await bridge.create("d");
+    assert.equal(busy.pid, rotated.pid, "有请求进行中时不重启");
+    assert.equal(busy.key, "ck_new");
+    bridge.close();
+    assert.equal(await inflight, "rejected");
+  } finally {
+    bridge.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("打包后的 Agent 从 PATH 找 Node，跳过 WindowsApps 目录", () => {
   const dir = mkdtempSync(join(tmpdir(), "novoard-node-"));
   try {

@@ -3,6 +3,7 @@
  * SEA 里没有 SDK 的 CLI 目录，所以会话交给系统 Node 跑 src/chat-worker.mjs。
  */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +57,15 @@ export function locateNode(env = process.env, options = {}) {
 }
 
 /**
+ * 会话进程启动时用的模型配置指纹。key 只参与哈希，不写日志。
+ * 面板保存会主动重启会话进程；Dec 轮换 key、环境变量变化没有通知，靠新建会话前比对指纹发现。
+ */
+export function codebuddyFingerprint(configured) {
+  const { apiKeySource = "", apiKey = "", environment = "", model = "" } = configured ?? {};
+  return createHash("sha256").update(JSON.stringify([apiKeySource, apiKey, environment, model])).digest("hex");
+}
+
+/**
  * env 是会话进程的基础环境。GUI 拉起时进程 PATH 只有系统目录，找不到 Homebrew 等装的 Node，
  * 所以宿主应传入与 target 脚本相同的登录 shell 环境（resolveScriptEnv）；不传时沿用进程环境。
  */
@@ -68,7 +78,13 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
   let buffer = "";
   let seq = 1;
   let starting = null;
+  let spawnedFingerprint = "";
   const pending = new Map();
+
+  function currentConfig() {
+    const panel = codebuddyFile ? readCodebuddyConfig(codebuddyFile) : { model: "", apiKey: "", environment: "internal" };
+    return resolveCodebuddyConfig(panel, { env, ...(decEnvFile ? { decFile: decEnvFile } : {}) });
+  }
 
   function setOrigin(next) {
     origin = next;
@@ -120,8 +136,7 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
       if (!worker) throw new Error(`没有找到会话程序。重新安装 ${edition.productName} 后再试。`);
       if (!origin) throw new Error("本机 Agent 还没准备好。");
       const script = plainWindowsPath(worker);
-      const panel = codebuddyFile ? readCodebuddyConfig(codebuddyFile) : { model: "", apiKey: "", environment: "internal" };
-      const configured = resolveCodebuddyConfig(panel, { env, ...(decEnvFile ? { decFile: decEnvFile } : {}) });
+      const configured = currentConfig();
       log.info?.(`[chat] 启动 node=${node} worker=${script} type=${configured.environment} model=${configured.model || "默认"} key=${configured.apiKeySource || "无"}`);
       const proc = spawn(node, [script], {
         stdio: ["pipe", "pipe", "pipe"],
@@ -134,13 +149,16 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
         windowsHide: true,
       });
       child = proc;
+      spawnedFingerprint = codebuddyFingerprint(configured);
       proc.stdout.on("data", onData);
       proc.stderr.on("data", (chunk) => {
         const text = chunk.toString("utf8").trim();
         if (text) log.info?.(`[chat] ${text}`);
       });
       proc.on("exit", (code) => {
-        if (child === proc) child = null;
+        // 主动重启时 child 已指向新进程（或为空），旧进程的请求在 restart() 里已经处理，这里不能误伤新进程上的请求
+        if (child !== proc) return;
+        child = null;
         failAll(new Error(code ? `模型会话进程已退出（${code}）` : "模型会话进程已退出"));
       });
       return proc;
@@ -161,14 +179,41 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
   function restart() {
     const current = child;
     child = null;
-    if (current) current.kill();
+    if (current) {
+      failAll(new Error("模型会话进程已重启"));
+      current.kill();
+    }
+  }
+
+  /**
+   * 新建会话前调用：key 来源或内容、类型、模型和会话进程启动时不同，就重启会话进程。
+   * 其他会话还在回复时不重启（进程退出会让它们的请求失败），留到下次新建会话再比对。
+   */
+  function refreshIfChanged() {
+    if (!child) return;
+    let configured;
+    try {
+      configured = currentConfig();
+    } catch {
+      return;
+    }
+    if (codebuddyFingerprint(configured) === spawnedFingerprint) return;
+    if (pending.size > 0) {
+      log.info?.(`[chat] 模型配置已变化（key=${configured.apiKeySource || "无"}），还有 ${pending.size} 个请求进行中，下次新建会话时再重启`);
+      return;
+    }
+    log.info?.(`[chat] 模型配置已变化（key=${configured.apiKeySource || "无"} type=${configured.environment}），重启会话进程`);
+    restart();
   }
 
   return {
     setOrigin,
     list: () => request("list"),
     history: (sessionId) => request("history", { sessionId }),
-    create: (title) => request("create", { title }),
+    create: (title) => {
+      refreshIfChanged();
+      return request("create", { title });
+    },
     remove: (sessionId) => request("delete", { sessionId }),
     interrupt: (sessionId) => request("interrupt", { sessionId }),
     answer: (sessionId, payload = {}) => request("answer", {
