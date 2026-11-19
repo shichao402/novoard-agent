@@ -269,7 +269,7 @@ test("Hub 委派：同样过 resolveInputs；缺值上行 failed 不启动；受
     skills: [{ id: "open", name: "open", description: "open", tags: [] }],
   };
   const client = createTunnelClient({
-    config: { ok: true, agentId: "agent-a", hubUrl: `ws://127.0.0.1:${hub.server.address().port}/tunnel`, agentToken: "agent-a-secret", contractVersion: "2.6" },
+    config: { ok: true, agentId: "agent-a", hubUrl: `ws://127.0.0.1:${hub.server.address().port}/tunnel`, agentToken: "agent-a-secret", contractVersion: "2.7" },
     card, targets, runner, stateDir, log: quiet, inputMemory: memory,
   });
   try {

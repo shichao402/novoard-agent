@@ -84,11 +84,11 @@ export type FrameAgentHelloAck = {
   "hubVersion"?: string;
   /** 能力包来源清单（契约 v2.4；v2.5 起 id 可选）：agent 包管理器据此拉取能力包；缺省表示 hub 未下发 */
   "packSources"?: {
-    /** 包名覆盖（v2.5 起可选）：缺省时 agent 安装后从包根 toolset.json 的 id 自动发现包名 */
+    /** 包名覆盖（v2.5 起可选）：缺省时 agent 从包根 toolset.json 的 id 自动发现包名；v2.7 起不带 id 的项是整仓来源 */
     "id"?: string;
     "git": string;
     "branch": string;
-    /** 包根在仓库内的相对路径，缺省为仓库根 */
+    /** 包根在仓库内的相对路径，只在带 id 时有意义；v2.7 起不带 id 的项表示整仓来源，agent 扫描仓库内全部 toolset.json */
     "subdir"?: string;
   }[];
 };

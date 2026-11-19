@@ -1,15 +1,18 @@
-import { Download, KeyRound, RefreshCw, Trash2 } from "lucide-react";
+import { Download, FolderGit2, KeyRound, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { listPacks, packAction, type PackEntry } from "@/lib/api";
+import { Switch } from "@/components/ui/switch";
+import { listPacks, packAction, scanPackRepo, setPackRepoAutoAdd, type PackEntry, type PackRepo } from "@/lib/api";
 
 /**
  * 能力包页（PRD-7 A7/A8）：每行一个来源或一个已装包，显示包名、版本、状态、来源与凭据命中。
- * 来源在 Hub 管理台「能力包来源」页维护；包名默认从仓库的 toolset.json 自动发现。
+ * 来源在 Hub 管理台「能力包来源」页维护，Hub 只登记仓库和分支（契约 v2.7）；
+ * 本机扫描仓库里所有 toolset.json，每个包根一行，点安装即可。仓库可单独开「自动添加」，扫到新包就自己装上。
  * 私有仓的令牌在「设置 → Git 凭据」配，这里只展示命中了哪一条。
  */
 export function PacksPage({ base }: { base: string }) {
   const [packs, setPacks] = useState<PackEntry[]>([]);
+  const [repos, setRepos] = useState<PackRepo[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -24,6 +27,7 @@ export function PacksPage({ base }: { base: string }) {
         .then((body) => {
           if (cancelled) return;
           setPacks(body.packs ?? []);
+          setRepos(body.repos ?? []);
           setLoaded(true);
         })
         .catch((caught: unknown) => {
@@ -60,16 +64,78 @@ export function PacksPage({ base }: { base: string }) {
     }
   }
 
+  async function rescan(repo: PackRepo) {
+    const label = repoLabel(repo);
+    setBusy(`repo:${repo.key}`);
+    setError("");
+    setNote(`${label}：扫描中…`);
+    try {
+      const result = await scanPackRepo(base, repo.key);
+      const added = result.added?.length ? `，自动添加 ${result.added.join("、")}` : "";
+      setNote(`${label}：扫描完成${added}`);
+    } catch (caught) {
+      setNote("");
+      setError(`${label}：${caught instanceof Error ? caught.message : "扫描失败"}`);
+    } finally {
+      setBusy(null);
+      setTick((n) => n + 1);
+    }
+  }
+
+  async function toggleAutoAdd(repo: PackRepo, on: boolean) {
+    setError("");
+    try {
+      await setPackRepoAutoAdd(base, repo.key, on);
+      setNote(on ? `${repoLabel(repo)}：已开启自动添加，正在扫描并安装仓库里的包…` : `${repoLabel(repo)}：已关闭自动添加`);
+    } catch (caught) {
+      setError(`${repoLabel(repo)}：${caught instanceof Error ? caught.message : "设置失败"}`);
+    } finally {
+      setTick((n) => n + 1);
+    }
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
       <p className="text-xs leading-5 text-muted">
-        来源由 Hub 管理台「能力包来源」页统一维护，连上 Hub 后自动同步到这台机器；包名从仓库里的 toolset.json 自动读取。私有仓请先在「设置 → Git 凭据」配置访问令牌。
+        Hub 管理台「能力包来源」页只登记仓库地址和分支，连上 Hub 后同步到这台机器；本机会扫描仓库里所有 toolset.json，子目录和包名都不用手填。私有仓请先在「设置 → Git 凭据」配置访问令牌。
       </p>
       {error ? <p className="text-sm text-bad" role="alert">{error}</p> : null}
       {note ? <p className="text-xs text-muted" aria-live="polite">{note}</p> : null}
-      {loaded && packs.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-line-hi px-6 py-16 text-center text-sm text-muted">还没有能力包来源。先在 Hub 管理台添加，再回到这里安装。</div>
-      ) : (
+      {repos.length > 0 ? (
+        <div className="grid gap-2">
+          {repos.map((repo) => {
+            const working = repo.scanning || busy === `repo:${repo.key}`;
+            return (
+              <div key={repo.key} className="flex items-start gap-3 rounded-2xl border border-line bg-panel px-4 py-3">
+                <FolderGit2 size={16} className="mt-0.5 shrink-0 text-faint" />
+                <div className="min-w-0 flex-1">
+                  <div className="break-all font-mono text-[13px]">{repo.git}#{repo.branch}</div>
+                  <div className="mt-0.5 text-[11px] text-faint">
+                    {working
+                      ? "扫描中…"
+                      : repo.scannedAt
+                        ? `扫到 ${repo.packs.length} 个包${repo.packs.length ? `：${repo.packs.map((p) => p.id || `${p.subdir ?? "仓库根"}（无效）`).join("、")}` : ""} · ${formatTime(repo.scannedAt)}${repo.commit ? ` · ${repo.commit}` : ""}`
+                        : "还没扫描"}
+                  </div>
+                  {repo.error ? <div className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-4 text-bad">{repo.error}</div> : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <label className="flex items-center gap-2 text-xs text-muted" title="开启后，扫描到仓库里还没装的包会自动安装；每 6 小时以及连上 Hub 时扫描一次">
+                    自动添加
+                    <Switch checked={repo.autoAdd} label={`自动添加 ${repoLabel(repo)}`} onChange={(on) => void toggleAutoAdd(repo, on)} />
+                  </label>
+                  <IconButton label={`重新扫描 ${repoLabel(repo)}`} disabled={working} onClick={() => void rescan(repo)}>
+                    <RefreshCw size={14} className={working ? "animate-spin" : ""} />扫描
+                  </IconButton>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {loaded && packs.length === 0 && repos.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-line-hi px-6 py-16 text-center text-sm text-muted">还没有能力包来源。先在 Hub 管理台添加仓库地址，再回到这里安装。</div>
+      ) : packs.length === 0 ? null : (
         <div className="overflow-hidden rounded-2xl border border-line bg-panel">
           <table className="w-full text-sm">
             <thead className="bg-surface text-left text-xs text-muted">
@@ -93,6 +159,7 @@ export function PacksPage({ base }: { base: string }) {
                       {pack.id ? <div className="font-mono text-[13px]">{pack.id}</div> : <div className="text-[13px] text-muted">自动</div>}
                       {pack.id && pack.source?.id ? <div className="text-[11px] text-faint">Hub 指定包名</div> : null}
                       {!pack.id ? <div className="text-[11px] text-faint">安装后从 toolset.json 读取包名</div> : null}
+                      {!pack.installed && pack.source?.found ? <div className="text-[11px] text-faint">仓库扫描发现</div> : null}
                       {pack.displayName && pack.displayName !== pack.id ? <div className="text-[11px] text-faint">{pack.displayName}</div> : null}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-muted">{pack.version || "—"}</td>
@@ -153,6 +220,17 @@ export function PacksPage({ base }: { base: string }) {
       />
     </div>
   );
+}
+
+function repoLabel(repo: PackRepo) {
+  return repo.git.replace(/\/+$/, "").replace(/\.git$/, "").split(/[/:]/).pop() || repo.git;
+}
+
+function formatTime(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 function rowKey(pack: PackEntry) {

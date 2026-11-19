@@ -20,6 +20,7 @@
 | A6 | 缺包诊断与预检 | A2、A5 | 新 `src/packs/diagnose.mjs`、`card.mjs`、`targets-store.mjs` |
 | A7 | 控制台 | A2、A5、A6 | `src/console-ui.mjs` 及前端 |
 | A8 | 契约 v2.5：来源自发现包名、本机 Git 凭据 | A5、A7；Hub H5 | `src/packs/`、`src/local-a2a.mjs`、桌面设置页与能力包页 |
+| A10 | 契约 v2.7：整仓扫描、本机「自动添加」、懒添加 | A8；Hub H6 | 新 `src/packs/repos.mjs`、`manager.mjs`、`main.mjs`、`local-a2a.mjs`、能力包页 |
 | A9 | Target 表单化、保存不丢字段、manifest 展示字段 | A8 | `desktop/src/pages/targets-page.tsx`、`desktop/src/lib/target-draft.mjs`、`cron.mjs` |
 
 ## A1 同步契约 v2.4
@@ -311,3 +312,16 @@ A6、A7 已实现，配套的 novoard-packs P4–P5、OSGToolset O2–O3 也一�
 - 其他 A2A 成员接入、跨成员联动 step。
 - 预演（dry-run）入口：协议已支持，界面以后再加。
 - 来源修改的实时推送。
+
+## A10 整仓扫描与自动添加（2026-11-19，契约 v2.7）
+
+起因：Hub 加来源要手填子目录，同一个仓库里每个包都得登记一遍。决定：Hub 只登记仓库和分支，扫描和自动添加都在 agent 本机做（配合 Hub PRD-6 H6）。
+
+- 整仓来源：`packSources` 项不带 `id` 即整仓来源（`isRepoSource`）。克隆到 `<packsDir>/.repos/<key>/`（`--depth 1 --branch`），刷新用 `fetch --depth 1` 加 `reset --hard FETCH_HEAD`，失败时删目录重克隆；仍失败记 `error`，沿用上次扫描结果。
+- 扫描：找全部 `toolset.json`，深度不超过 5 层，跳过隐藏目录、`node_modules`、`__pycache__`、`venv`、`.venv`，包根内不再往下找。结果存 `<packsDir>/.repos/<key>.json`。每个包根派生一个来源 `{key, git, branch, subdir?, repo, found, displayName}`，key 按 `git + branch + subdir` 计算，与旧版手填子目录的来源一致。
+- 自动添加：开关存 `<stateDir>/pack-repos.json`（`{schemaVersion:1, repos:{<key>:{autoAdd:true}}}`）。开着的仓库扫描后补装新包；之前装失败过的包不自动重试。
+- 同步时机：收到 hello.ack 后、启动 30 秒后各一次，之后每 6 小时强制一次；`NOVOARD_PACK_SYNC_MS=0` 关闭定时同步。打开能力包列表时，后台扫描从没扫过的仓库。同一时间只跑一轮。
+- 懒添加：按包名安装找不到候选，且有仓库从没扫过或超过 10 分钟未扫时，先重扫再找。
+- 接口：`GET /api/packs` 增加 `repos`（`key`、`git`、`branch`、`autoAdd`、`scanning`、`scannedAt`、`commit`、`packs`、`error`）；`POST /api/pack-repos/:key/scan` 立即扫描；`PUT /api/pack-repos/:key` body `{autoAdd}`。写接口校验同源并记审计。内置会话 `novoard_list_packs` 输出同样带 `repos`。
+- 桌面能力包页：每个整仓来源一张卡片，显示扫到的包、扫描时间与 commit、错误，带「自动添加」开关和「扫描」按钮；扫描发现的未装包标「仓库扫描发现」。
+- 验收：`test/packs-repos.test.mjs` 覆盖包根发现、按 key 安装、懒添加与过期重扫、自动添加补装与开关持久化、旧子目录来源迁移后不成孤儿、扫描失败保留上次结果。

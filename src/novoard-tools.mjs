@@ -145,6 +145,14 @@ export async function dispatchNovoardTool(name, args, { origin, fetchImpl = glob
         credential: p.credential,
         busy: p.busy === true || undefined,
       })),
+      repos: (body.repos ?? []).map((r) => ({
+        git: r.git,
+        branch: r.branch,
+        autoAdd: r.autoAdd === true,
+        scannedAt: r.scannedAt,
+        found: (r.packs ?? []).map((p) => p.id || `（${p.subdir ?? "仓库根"}：${p.problem ?? "无效"}）`),
+        error: r.error,
+      })),
     });
   }
   if (name === "novoard_pack_tools") {

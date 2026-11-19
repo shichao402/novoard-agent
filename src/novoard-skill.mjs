@@ -19,7 +19,7 @@ description: 在这台 ${edition.productName} 的本机会话里自己动手：�
 - \`novoard_status\`：成员、Hub 是否已注册、有哪些 Target。
 - \`novoard_get_settings\`：Hub 地址和成员 ID。令牌不会回显。
 - \`novoard_list_targets\`：Target 全文。
-- \`novoard_list_packs\`：本机已装的能力包，和 Hub 下发但还没装的来源。
+- \`novoard_list_packs\`：本机已装的能力包，和还没装的包；\`repos\` 是 Hub 登记的整仓来源，agent 会扫描仓库里所有 toolset.json，\`found\` 是扫到的包名。
 - \`novoard_pack_tools\`：已装包的工具清单和参数定义。
 - \`novoard_get_schedule\`：定时总开关、时区，每个定时 Target 的下次运行和上次结果。
 - \`novoard_recent_activity\` / \`novoard_tail_logs\`：最近执行和日志。
@@ -51,7 +51,7 @@ description: 在这台 ${edition.productName} 的本机会话里自己动手：�
 
 写 uses 步骤的做法：
 
-1. \`novoard_list_packs\` 看包装没装。没装但来源在列表里，告诉用户要装哪个，同意后 \`novoard_install_pack\`（key 用返回的 installKey）。来源也没有，就请用户先在 Hub 管理台的「能力包来源」页加上。
+1. \`novoard_list_packs\` 看包装没装。没装但来源在列表里，告诉用户要装哪个，同意后 \`novoard_install_pack\`（key 用返回的 installKey）。来源也没有，就请用户先在 Hub 管理台的「能力包来源」页加上仓库地址（只填仓库和分支，子目录由 agent 自动扫描）。
 2. \`novoard_pack_tools\` 拿工具的 params，\`with\` 的键用参数的 name，必填的都要给，类型照定义（enum 只能取列出的值，列表参数给字符串数组），有 default 的可以不写。不要凭印象编参数。
 3. 工具标了 \`platforms\` 而本机不在其中，不要用它。
 4. 工具标了 \`remoteWrite: true\`（会写远端，如提交、推送），Target 必须 \`requiresApproval: true\`，并先跟用户讲清会写到哪里。

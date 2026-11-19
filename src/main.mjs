@@ -14,6 +14,7 @@ import { loadTargets, expandSteps, deriveCard, validateUsesSteps } from "./card.
 import { createPackRegistry } from "./packs/registry.mjs";
 import { createPackManager } from "./packs/manager.mjs";
 import { createSourcesCache, packSourcesPath } from "./packs/sources-cache.mjs";
+import { createPackCatalog, createPackRepos, packReposPath } from "./packs/repos.mjs";
 import { createGitAuth, gitCredentialsPath } from "./packs/git-auth.mjs";
 import { createDiagnoser, createGitCheck, formatProblems } from "./packs/diagnose.mjs";
 import { createScheduler, systemTimezone } from "./scheduler.mjs";
@@ -83,10 +84,13 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   const packSources = createSourcesCache({ file: packSourcesPath(state), log });
   // 私有仓凭据只在本机（PRD-7 A8）：<stateDir>/git-credentials.json，按 URL 前缀匹配
   const gitAuth = createGitAuth({ file: gitCredentialsPath(state), log });
+  // 整仓来源（契约 v2.7）：Hub 只给仓库地址，agent 扫描包根；自动添加开关存 <stateDir>/pack-repos.json
+  const packRepos = createPackRepos({ packsDir: packs.packsDir, sources: packSources, settingsFile: packReposPath(state), gitAuth, env, log });
   // 包管理（PRD-7 A5）：安装/更新/删除结束（成功或失败）都重派生 Card 并发 card.update
   const packManager = createPackManager({
     registry: packs,
-    sources: packSources,
+    sources: createPackCatalog({ sources: packSources, repos: packRepos }),
+    repos: packRepos,
     gitAuth,
     log,
     env,
@@ -145,6 +149,22 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     }
   };
 
+  let packSyncRunning = false;
+  /** 扫描整仓来源并给开了自动添加的仓补装新包；后台跑，同时只有一轮。 */
+  function syncPackRepos(why, { force = false } = {}) {
+    if (packSyncRunning || packRepos.list().length === 0) return;
+    packSyncRunning = true;
+    packManager
+      .syncRepos({ force })
+      .then((r) => {
+        if (r.scanned || r.added.length) log.info?.(`[packs] 整仓同步（${why}）：扫描 ${r.scanned} 个仓库${r.added.length ? `，自动添加 ${r.added.join("、")}` : ""}`);
+      })
+      .catch((error) => log.warn?.(`[packs] 整仓同步（${why}）失败：${error?.message ?? error}`))
+      .finally(() => {
+        packSyncRunning = false;
+      });
+  }
+
   /** 重派生 Card 并上报（profile 保存、包变更共用）。 */
   function refreshCard(why) {
     const current = store.read();
@@ -182,6 +202,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
       const r = packSources.replace(list);
       log.info?.(`[packs] 已缓存 hub 下发的能力包来源 ${r.count} 条`);
       packManager.reconcile();
+      syncPackRepos("hub 下发来源");
     },
   });
   peer = createPeerTalk({
@@ -344,11 +365,21 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   scheduler.start();
   log.info?.(`[schedule] 定时${scheduler.status().enabled ? "已开启" : "未开启"}，时区 ${scheduler.timezone}`);
 
+  // 整仓来源的定时扫描（契约 v2.7）：启动 30 秒后一次，之后每 6 小时；NOVOARD_PACK_SYNC_MS=0 关闭（测试用）
+  const syncEvery = env.NOVOARD_PACK_SYNC_MS === undefined ? 6 * 3600_000 : Number(env.NOVOARD_PACK_SYNC_MS);
+  const syncTimers = [];
+  if (syncEvery > 0) {
+    syncTimers.push(setTimeout(() => syncPackRepos("启动"), Math.min(30_000, syncEvery)));
+    syncTimers.push(setInterval(() => syncPackRepos("定时", { force: true }), syncEvery));
+    for (const t of syncTimers) t.unref?.();
+  }
+
   /** 统一停机：关隧道 + localhost 端点（测试与优雅退出共用）。 */
   let stopped = false;
   async function stop() {
     if (stopped) return;
     stopped = true;
+    for (const t of syncTimers) clearTimeout(t);
     scheduler.stop();
     tunnel.close();
     chat.close();
@@ -356,7 +387,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     await localA2A.close();
   }
 
-  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, scheduler, packs, packManager, packSources, gitAuth, diagnoser, stop, agentDir: dir };
+  return { config, card: cardRef.current, targets: expanded.targets, runtime, tunnel, localAudit, localA2A, store, peer, onTargetsSaved, scheduler, packs, packManager, packSources, packRepos, gitAuth, diagnoser, stop, agentDir: dir };
 }
 
 function resolveTimezone(configured, log) {

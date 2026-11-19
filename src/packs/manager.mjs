@@ -12,6 +12,9 @@
  * - 对齐（reconcile）：已装目录名与来源应得的包名不一致时改名（例如旧版人填的 default → versionControl）。
  *
  * 来源只认 sources（hub 下发并缓存的 packSources）；更新时来源已被删除则退回 .meta 里的快照。
+ * 契约 v2.7 起 sources 是 repos.mjs 的 catalog：整仓来源由 repos 扫描出包根，每个包根是一个派生来源（带 found 包名）。
+ * - 按包名安装找不到时，先把过期的整仓扫描重扫一遍再找（懒添加）；
+ * - 整仓开了「自动添加」：扫描后把仓里还没装的包都装上（syncRepos / scanRepo）。
  * 私有仓凭据来自本机 gitAuth（按 URL 前缀），每次 git 调用单独注入，不读本机 credential helper。
  * 同一个包（或同一个来源）的并发操作合并成一次。
  * 每次 install/update/remove 结束（成功或失败）都调 onChange，装配层据此重派生 Card 并发 card.update。
@@ -24,7 +27,7 @@ import { depsStatus, prepareDeps } from "./deps.mjs";
 import { parseUses } from "./registry.mjs";
 import { PACK_ID_PATTERN, SOURCE_KEY_PATTERN, sourceKeyOf } from "./sources-cache.mjs";
 
-export function createPackManager({ registry, sources, gitAuth = null, log = console, run = runCommand, platform = process.platform, env = process.env, onChange, now = () => new Date() } = {}) {
+export function createPackManager({ registry, sources, repos = null, gitAuth = null, log = console, run = runCommand, platform = process.platform, env = process.env, onChange, now = () => new Date() } = {}) {
   const packsDir = registry?.packsDir;
   if (!packsDir) throw new Error("createPackManager 需要带 packsDir 的 registry");
   const inflight = new Map();
@@ -89,7 +92,7 @@ export function createPackManager({ registry, sources, gitAuth = null, log = con
       const s = sources?.get?.(meta.sourceKey ?? sourceKeyOf(meta));
       if (s) return s;
     }
-    return sources?.byOverride?.(name) ?? null;
+    return sources?.byOverride?.(name) ?? sources?.repoFor?.(meta) ?? null;
   }
 
   /** 单飞：同一个 key 同时只有一个操作在跑，后来的直接拿同一个结果。 */
@@ -204,12 +207,25 @@ export function createPackManager({ registry, sources, gitAuth = null, log = con
     const override = sources?.byOverride?.(name);
     if (override) return installedByKey().has(override.key) ? [] : [override];
     const installed = installedByKey();
-    return (sources?.list?.() ?? []).filter((s) => !s.id && !installed.has(s.key));
+    const open = (sources?.list?.() ?? []).filter((s) => !s.id && !installed.has(s.key));
+    // 扫描过的包名已知，直接命中；旧式单包来源包名未知，只能装了再看
+    const exact = open.filter((s) => s.found === name);
+    return exact.length ? exact : open.filter((s) => !s.repo);
+  }
+
+  /** 有没有过期或从没扫过的整仓来源（触发路径上缺包时值得先重扫）。 */
+  function hasStaleRepos() {
+    return (repos?.list?.() ?? []).some((r) => repos.isStale(r));
   }
 
   async function doInstallByName(name, onProgress) {
     if (existsSync(join(registry.cloneDirOf(name), ".git"))) return doUpdate(name, onProgress);
-    const candidates = candidatesFor(name);
+    let candidates = candidatesFor(name);
+    if (!candidates.some((s) => s.found === name) && hasStaleRepos()) {
+      onProgress?.(`扫描能力包仓库，查找 ${name}…`);
+      await repos.scanAll();
+      candidates = candidatesFor(name);
+    }
     if (!candidates.length) return { ...fail("source-unknown", `不知道能力包 ${name} 从哪里安装，请在 Hub 管理台添加来源`), id: name };
     let lastFailure = null;
     for (const source of candidates) {
@@ -317,7 +333,9 @@ export function createPackManager({ registry, sources, gitAuth = null, log = con
     }
     for (const source of sources?.list?.() ?? []) {
       if (installed.has(source.key)) continue;
-      const entry = { id: source.id ?? null, sourceKey: source.key, installed: false, source, busy: inflight.has(source.key) || (source.id ? inflight.has(source.id) : false) };
+      const name = source.found ?? source.id ?? null;
+      const entry = { id: name, sourceKey: source.key, installed: false, source, busy: inflight.has(source.key) || (name ? inflight.has(name) : false) };
+      if (source.displayName && source.displayName !== name) entry.displayName = source.displayName;
       const problem = sourceProblems.get(source.key);
       if (problem) {
         entry.problem = problem.reason;
@@ -339,9 +357,9 @@ export function createPackManager({ registry, sources, gitAuth = null, log = con
     return [...ids];
   }
 
-  /** 有没有来源可能提供该包名（覆盖名命中，或还有未装的无覆盖来源）。 */
+  /** 有没有来源可能提供该包名（覆盖名命中、扫描命中、旧式未装来源，或还有待扫描的整仓来源）。 */
   function canProvide(name) {
-    return candidatesFor(name).length > 0;
+    return candidatesFor(name).length > 0 || hasStaleRepos();
   }
 
   /**
@@ -353,6 +371,7 @@ export function createPackManager({ registry, sources, gitAuth = null, log = con
     for (const name of missingPacks(steps)) {
       if (!canProvide(name)) continue;
       const r = await install(name, { onProgress });
+      if (!r.ok && r.code === "source-unknown") continue;
       if (!r.ok) return { ...r, reason: `安装能力包 ${name} 失败：${r.reason}` };
       installedNow.push(name);
     }
@@ -364,7 +383,61 @@ export function createPackManager({ registry, sources, gitAuth = null, log = con
     return missingPacks(steps).some((name) => canProvide(name));
   }
 
-  return { install, update, remove, list, version, missingPacks, needsInstall, ensureFor, canProvide, reconcile, patchesDir };
+  /** 整仓来源列表（扫描结果、自动添加开关）。 */
+  function listRepos() {
+    return repos?.list?.() ?? [];
+  }
+
+  /** 把某个整仓里还没装的包都装上；装过失败的不自动重试（手动点安装仍可以）。→ 新装的包名 */
+  async function addAllFrom(repoKey, onProgress) {
+    const installed = installedByKey();
+    const added = [];
+    for (const s of sources?.list?.() ?? []) {
+      if (s.repo !== repoKey || !s.found || installed.has(s.key) || sourceProblems.has(s.key)) continue;
+      const r = await single(s.key, () => runSourceInstall(s, onProgress, s.found));
+      if (r.ok) added.push(r.id);
+      else log.warn?.(`[packs] 自动添加 ${s.found} 失败：${r.reason}`);
+    }
+    return added;
+  }
+
+  /** 扫描一个整仓来源；开了自动添加就顺带装新包。→ { ok, repo, added } */
+  async function scanRepo(repoKey, { onProgress } = {}) {
+    if (!repos?.get?.(repoKey)) return fail("source-unknown", `整仓来源 ${repoKey} 不存在，可能已在 Hub 删除`);
+    const repo = await repos.scan(repoKey);
+    if (!repo) return fail("source-unknown", `整仓来源 ${repoKey} 不存在，可能已在 Hub 删除`);
+    const added = repo.autoAdd && !repo.error ? await addAllFrom(repoKey, onProgress) : [];
+    try { onChange?.({ id: repoKey, result: { ok: true, scanned: repoKey, added } }); } catch {}
+    return repo.error ? { ...fail("scan-failed", repo.error), repo, added } : { ok: true, repo, added };
+  }
+
+  /**
+   * 定时与 hello.ack 后调用：扫描过期的整仓来源（force 时全扫），再给开了自动添加的仓补装新包。
+   * → { scanned, added }
+   */
+  async function syncRepos({ force = false } = {}) {
+    if (!repos) return { scanned: 0, added: [] };
+    repos.prune?.();
+    const scanned = (await repos.scanAll({ force })).filter(Boolean);
+    const added = [];
+    for (const repo of listRepos()) {
+      if (repo.autoAdd && !repo.error) added.push(...(await addAllFrom(repo.key)));
+    }
+    if (scanned.length || added.length) {
+      try { onChange?.({ id: "repos", result: { ok: true, scanned: scanned.length, added } }); } catch {}
+    }
+    return { scanned: scanned.length, added };
+  }
+
+  /** 改自动添加开关；打开时在后台扫一遍并补装。 */
+  function setAutoAdd(repoKey, on) {
+    if (!repos?.get?.(repoKey)) return fail("source-unknown", `整仓来源 ${repoKey} 不存在，可能已在 Hub 删除`);
+    const autoAdd = repos.setAutoAdd(repoKey, on === true);
+    if (autoAdd) scanRepo(repoKey).catch((error) => log.warn?.(`[packs] 自动添加扫描失败：${error?.message ?? error}`));
+    return { ok: true, key: repoKey, autoAdd };
+  }
+
+  return { install, update, remove, list, listRepos, scanRepo, syncRepos, setAutoAdd, version, missingPacks, needsInstall, ensureFor, canProvide, reconcile, patchesDir };
 }
 
 function stamp(d) {

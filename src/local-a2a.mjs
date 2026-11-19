@@ -526,7 +526,33 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
     // 能力包管理（PRD-7 A5）：列出已装与已知来源；安装/更新/删除等操作完成后再返回结果
     if (url.pathname === "/api/packs" && req.method === "GET") {
       if (!packManager) return json(res, 404, { ok: false, reason: "能力包管理未装配" });
-      packManager.list().then((packs) => json(res, 200, { ok: true, packs })).catch((error) => json(res, 500, { ok: false, reason: error.message }));
+      // 从没扫过的整仓来源：打开列表时在后台扫一次（不等结果，页面轮询会拿到）
+      for (const repo of packManager.listRepos?.() ?? []) {
+        if (!repo.scannedAt && !repo.scanning) packManager.scanRepo(repo.key).catch(() => {});
+      }
+      packManager.list().then((packs) => json(res, 200, { ok: true, packs, repos: packManager.listRepos?.() ?? [] })).catch((error) => json(res, 500, { ok: false, reason: error.message }));
+      return;
+    }
+    // 整仓来源（契约 v2.7）：POST /api/pack-repos/<key>/scan 重新扫描；PUT /api/pack-repos/<key> { autoAdd } 改自动添加
+    const repoOp = url.pathname.match(/^\/api\/pack-repos\/(src-[0-9a-f]{12})(?:\/(scan))?$/);
+    if (repoOp && ((req.method === "POST" && repoOp[2]) || (req.method === "PUT" && !repoOp[2]))) {
+      if (!packManager?.scanRepo) return json(res, 404, { ok: false, reason: "能力包管理未装配" });
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      const [, key] = repoOp;
+      if (req.method === "POST") {
+        packManager.scanRepo(key).then((r) => {
+          audit?.({ lane: "local", target: `pack-repo:${key}`, outcome: r.ok ? "completed" : "failed", detail: { via: "console", action: "scan", ...(r.ok ? { added: r.added } : { code: r.code, reason: r.reason }) } });
+          json(res, r.ok ? 200 : r.code === "source-unknown" ? 404 : 422, r);
+        }).catch((error) => json(res, 500, { ok: false, reason: error.message }));
+        return;
+      }
+      readJsonBody(req).then((body) => {
+        if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+        if (typeof body.data?.autoAdd !== "boolean") return json(res, 400, { ok: false, reason: "需要 autoAdd: true 或 false" });
+        const r = packManager.setAutoAdd(key, body.data.autoAdd);
+        if (r.ok) audit?.({ lane: "local", target: `pack-repo:${key}`, outcome: "completed", detail: { via: "console", action: "auto-add", autoAdd: r.autoAdd } });
+        json(res, r.ok ? 200 : 404, r);
+      });
       return;
     }
     // Target 表单的数据源（PRD-7 A9）：本机已装包的工具清单 + 平台 + 定时时区与总开关

@@ -166,8 +166,8 @@ export type PackEntry = {
   sourceKey: string | null;
   installed: boolean;
   busy: boolean;
-  /** source.id 是 Hub 上填的「包名覆盖」，不填表示自动发现。 */
-  source: { key?: string; id?: string; git: string; branch: string; subdir?: string } | null;
+  /** source.id 是 Hub 上填的「包名覆盖」，不填表示自动发现；repo/found 表示由整仓扫描得到。 */
+  source: { key?: string; id?: string; git: string; branch: string; subdir?: string; repo?: string; found?: string } | null;
   version?: string | null;
   displayName?: string;
   depsReady?: boolean;
@@ -180,8 +180,29 @@ export type PackEntry = {
   credential?: GitCredential | null;
 };
 
+/** Hub 登记的整仓来源（契约 v2.7）：agent 扫描仓库里所有 toolset.json。 */
+export type PackRepo = {
+  key: string;
+  git: string;
+  branch: string;
+  autoAdd: boolean;
+  scanning: boolean;
+  scannedAt: string | null;
+  commit: string | null;
+  packs: Array<{ id: string; subdir?: string; displayName?: string; problem?: string }>;
+  error?: string;
+};
+
 export function listPacks(base: string) {
-  return request<{ ok: boolean; packs: PackEntry[] }>(base, "/api/packs");
+  return request<{ ok: boolean; packs: PackEntry[]; repos?: PackRepo[] }>(base, "/api/packs");
+}
+
+export function scanPackRepo(base: string, key: string) {
+  return request<{ ok: boolean; reason?: string; added?: string[] }>(base, `/api/pack-repos/${encodeURIComponent(key)}/scan`, { method: "POST", body: "{}" });
+}
+
+export function setPackRepoAutoAdd(base: string, key: string, autoAdd: boolean) {
+  return request<{ ok: boolean; reason?: string; autoAdd?: boolean }>(base, `/api/pack-repos/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify({ autoAdd }) });
 }
 
 /** 能力包工具参数（ADR-0019 §1）。label/description/format 为表单展示用，可缺省。 */
