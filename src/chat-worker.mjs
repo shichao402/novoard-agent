@@ -14,7 +14,7 @@ const spawnHidden = childProcess.spawn;
 childProcess.spawn = function patchedSpawn(command, args, options = {}) {
   return spawnHidden.call(this, command, args, { ...options, windowsHide: true });
 };
-import { createSessionStore } from "./session-store.mjs";
+import { closeOpenTurns, createSessionStore } from "./session-store.mjs";
 import { explainAgentError, isMissingConversation, normalizeSdkMessage } from "./chat-events.mjs";
 import { dispatchNovoardTool } from "./novoard-tools.mjs";
 import { createAskGate, formatAnswers, normalizeQuestions } from "./ask-user.mjs";
@@ -39,12 +39,17 @@ writeFileSync(join(skillsDir, NOVOARD_SKILL_NAME, "SKILL.md"), NOVOARD_SKILL);
 
 const store = createSessionStore(sessionDir);
 const live = new Map();
-const queues = new Map();
+/** 每个会话同一时刻最多一轮：sessionId → { requestId, stopping }。没有排队，忙时新消息直接被拒。 */
+const turns = new Map();
 const holders = new Map();
-const inflight = new Map();
 const peerTurns = new Set();
 const askGate = createAskGate();
 const approvalGate = createApprovalGate();
+
+for (const item of closeOpenTurns(store, "会话进程上次没有正常结束，这一轮没有完成。")) {
+  for (const event of item.events) broadcast({ kind: "message", sessionId: item.sessionId, event });
+  broadcast({ kind: "session", session: item.session });
+}
 
 function holderFor(id) {
   const existing = holders.get(id);
@@ -54,9 +59,26 @@ function holderFor(id) {
   return holder;
 }
 
+/** 落盘并推给所有订阅者；发起这一轮的请求另外收到一份（成员对话要从中取回复）。 */
 function publish(sessionId, requestId, event) {
-  if (sessionId) store.append(sessionId, event);
-  if (requestId != null) emit({ id: requestId, event });
+  if (!sessionId || !store.get(sessionId)) return null;
+  const row = store.append(sessionId, event);
+  broadcast({ kind: "message", sessionId, event: row });
+  if (requestId != null) emit({ id: requestId, event: row });
+  return row;
+}
+
+/** 改列表项并推送，界面侧栏和「是否在运行」跟着变。 */
+function touch(sessionId, patch) {
+  const current = store.get(sessionId);
+  if (!current) return null;
+  const session = store.upsert({ ...current, ...patch, updatedAt: new Date().toISOString() });
+  broadcast({ kind: "session", session });
+  return session;
+}
+
+function broadcast(payload) {
+  emit({ broadcast: payload });
 }
 
 function emit(payload) {
@@ -82,7 +104,7 @@ function sessionOptions(sdk, holder) {
       const questions = normalizeQuestions(input);
       if (!questions.length) return { behavior: "deny", message: "问题格式不正确，没有可回答的题目。" };
       const questionId = String(options?.toolUseID || `ask-${Date.now()}`);
-      const requestId = inflight.get(sessionId);
+      const requestId = turns.get(sessionId)?.requestId;
       publish(sessionId, requestId, { kind: "question", questionId, questions });
       let payload;
       try {
@@ -105,7 +127,7 @@ function sessionOptions(sdk, holder) {
       return { behavior: "allow", updatedInput: { ...baseInput, answers } };
     },
     persistSession: true,
-    includePartialMessages: true,
+    includePartialMessages: false,
     sessionId: holder.id || undefined,
     mcpServers: { novoard: server },
     allowedTools: [...NOVOARD_MCP_TOOLS, ...BUILTIN_ALLOWED_TOOLS],
@@ -134,7 +156,7 @@ async function approveTool(sessionId, toolName, input, options, permission) {
     return { behavior: "deny", message: `这一轮是其他成员发起的，没有本机用户确认，${toolName} 不能直接用。需要时写成 Target 经 novoard_run_target 执行。` };
   }
   const approvalId = String(options?.toolUseID || `approve-${Date.now()}`);
-  const requestId = inflight.get(sessionId);
+  const requestId = turns.get(sessionId)?.requestId;
   const call = describeToolCall(toolName, input);
   publish(sessionId, requestId, { kind: "approval", approvalId, ...call });
   let answer;
@@ -234,13 +256,6 @@ async function loadSdk() {
   };
 }
 
-function enqueue(sessionId, job) {
-  const previous = queues.get(sessionId) ?? Promise.resolve();
-  const run = previous.then(job, job);
-  queues.set(sessionId, run.catch(() => {}));
-  return run;
-}
-
 async function openSession(sdk, id, resume) {
   if (live.has(id)) return live.get(id);
   const holder = holderFor(id);
@@ -252,7 +267,8 @@ async function openSession(sdk, id, resume) {
   return session;
 }
 
-async function consume(session, requestId) {
+/** 读完这一轮的流。增量和成功的 done 不落盘也不推送：界面只显示完整消息，轮次结束由 turn 事件表示。 */
+async function consume(session, sessionId, turn) {
   let missing = false;
   const state = { hidden: new Set() };
   for await (const message of session.stream()) {
@@ -261,12 +277,11 @@ async function consume(session, requestId) {
       continue;
     }
     for (const event of normalizeSdkMessage(message, state)) {
-      if (event.kind !== "delta" && !(event.kind === "done" && event.ok)) store.append(session.sessionId, event);
-      emit({ id: requestId, event });
-      if (event.kind === "assistant" && event.text) {
-        const current = store.get(session.sessionId);
-        if (current) store.upsert({ ...current, preview: event.text.slice(0, 80), updatedAt: new Date().toISOString() });
-      }
+      if (event.kind === "delta" || (event.kind === "done" && event.ok)) continue;
+      // 用户点了停止时 SDK 补一句英文，界面用 turn 的 interrupted 统一显示
+      if (turn.stopping && event.kind === "assistant" && /^Interrupted by user$/i.test(event.text ?? "")) continue;
+      publish(sessionId, turn.requestId, event);
+      if (event.kind === "assistant" && event.text) touch(sessionId, { preview: event.text.slice(0, 80) });
     }
   }
   return { missing };
@@ -305,21 +320,32 @@ async function handle(request) {
     return;
   }
   if (request.op === "delete") {
+    const turn = turns.get(request.sessionId);
+    if (turn) turn.stopping = true;
     askGate.cancelSession(request.sessionId);
     approvalGate.forgetSession(request.sessionId);
     holders.delete(request.sessionId);
     const session = live.get(request.sessionId);
     live.delete(request.sessionId);
-    try { session?.close(); } catch { /* 已关闭 */ }
+    // 先删记录：正在跑的那一轮收尾时发现会话没了就不再写
     store.remove(request.sessionId);
+    try { session?.close(); } catch { /* 已关闭 */ }
+    broadcast({ kind: "session_removed", sessionId: request.sessionId });
     emit({ id, result: { ok: true } });
     return;
   }
   if (request.op === "interrupt") {
+    // 只有正在跑的这一轮可停；没有排队，所以停下就是真的停了
+    const turn = turns.get(request.sessionId);
+    if (!turn) {
+      emit({ id, result: { ok: true, running: false } });
+      return;
+    }
+    turn.stopping = true;
     askGate.cancelSession(request.sessionId);
     approvalGate.cancelSession(request.sessionId);
     await live.get(request.sessionId)?.interrupt();
-    emit({ id, result: { ok: true } });
+    emit({ id, result: { ok: true, running: true } });
     return;
   }
   if (request.op === "approve") {
@@ -378,45 +404,55 @@ async function handle(request) {
     const now = new Date().toISOString();
     const entry = { id: sessionId, title: String(request.title || "新对话").slice(0, 80), createdAt: now, updatedAt: now, preview: "" };
     store.upsert(entry);
+    broadcast({ kind: "session", session: entry });
     emit({ id, result: { session: entry } });
     return;
   }
   if (request.op === "send") {
-    await enqueue(request.sessionId, async () => {
-      let session = live.get(request.sessionId);
-      if (!session) {
-        if (!store.get(request.sessionId)) throw new Error("会话不存在");
-        session = await openSession(sdk, request.sessionId, true);
-      }
-      const text = String(request.text ?? "").trim();
-      if (!text) throw new Error("消息是空的");
-      store.append(request.sessionId, { kind: "user", text });
-      const current = store.get(request.sessionId);
-      store.upsert({
-        ...current,
-        title: current?.title && current.title !== "新对话" ? current.title : text.slice(0, 32),
-        preview: text.slice(0, 80),
-        updatedAt: new Date().toISOString(),
-      });
-      inflight.set(request.sessionId, id);
-      if (request.peer === true) peerTurns.add(request.sessionId);
-      else peerTurns.delete(request.sessionId);
-      try {
+    const sessionId = request.sessionId;
+    const text = String(request.text ?? "").trim();
+    if (!text) return emit({ id, error: "消息是空的", code: "empty" });
+    const entry = store.get(sessionId);
+    if (!entry) return emit({ id, error: "会话不存在", code: "missing" });
+    if (turns.has(sessionId)) return emit({ id, error: "上一轮还没结束。等它结束，或者先点停止。", code: "busy" });
+    const turn = { requestId: id, stopping: false };
+    turns.set(sessionId, turn);
+    if (request.peer === true) peerTurns.add(sessionId);
+    else peerTurns.delete(sessionId);
+    publish(sessionId, id, { kind: "user", text });
+    publish(sessionId, id, { kind: "turn", state: "running" });
+    touch(sessionId, {
+      running: true,
+      title: entry.title && entry.title !== "新对话" ? entry.title : text.slice(0, 32),
+      preview: text.slice(0, 80),
+    });
+    emit({ id, accepted: true });
+    let failure = "";
+    try {
+      let session = live.get(sessionId) ?? await openSession(sdk, sessionId, true);
+      if (!turn.stopping) {
         await session.send(text);
-        let outcome = await consume(session, id);
-        if (outcome.missing) {
+        let outcome = await consume(session, sessionId, turn);
+        if (outcome.missing && !turn.stopping) {
           process.stderr.write(`[chat] 会话 ${request.sessionId} 在 CodeBuddy 侧不存在，用同一 id 重建后重发\n`);
           session = await recreateSession(sdk, request.sessionId);
           await session.send(text);
-          outcome = await consume(session, id);
+          outcome = await consume(session, sessionId, turn);
           if (outcome.missing) throw new Error("CodeBuddy 找不到这个会话，重建也没有成功。删除这个对话后新建一个再试。");
         }
-        emit({ id, result: { ok: true, session: store.get(request.sessionId) } });
-      } finally {
-        inflight.delete(request.sessionId);
-        peerTurns.delete(request.sessionId);
       }
-    });
+    } catch (error) {
+      if (!turn.stopping) failure = explainAgentError(error);
+    } finally {
+      turns.delete(sessionId);
+      peerTurns.delete(sessionId);
+    }
+    const outcome = turn.stopping ? "interrupted" : failure ? "error" : "ok";
+    if (failure) publish(sessionId, id, { kind: "error", text: failure });
+    publish(sessionId, id, { kind: "turn", state: "idle", outcome });
+    const session = touch(sessionId, { running: false });
+    if (failure) emit({ id, error: failure });
+    else emit({ id, result: { ok: true, outcome, session } });
     return;
   }
   emit({ id, error: `未知操作：${request.op}` });

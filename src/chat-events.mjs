@@ -58,8 +58,10 @@ export function normalizeSdkMessage(message, state = { hidden: new Set() }) {
     return [{ kind: "error", text: explainAgentError(message.error ?? "执行失败") }];
   }
   if (message.type === "system" && message.subtype === "init") {
-    const mcp = (message.mcp_servers ?? []).map((item) => `${item.name}:${item.status}`).join(", ");
-    return [{ kind: "status", text: `已连接 ${message.model || "模型"}${mcp ? ` · MCP ${mcp}` : ""}` }];
+    // 每轮都会来一次；只有工具服务没连上时才值得告诉用户
+    const broken = (message.mcp_servers ?? []).filter((item) => item?.status && item.status !== "connected");
+    if (!broken.length) return [];
+    return [{ kind: "status", text: `工具服务未连上：${broken.map((item) => `${item.name}（${item.status}）`).join("、")}` }];
   }
   if (message.type === "system" && message.subtype === "task_started") {
     return [{ kind: "status", text: message.description ? `后台任务：${message.description}` : "后台任务已开始" }];

@@ -290,6 +290,8 @@ export type ChatSession = {
   createdAt: string;
   updatedAt: string;
   preview: string;
+  /** 后端会话索引上的「有一轮在跑」。 */
+  running?: boolean;
 };
 
 export type AskOption = { label: string; description?: string };
@@ -303,6 +305,12 @@ export type AskQuestion = {
 
 export type ChatEvent = {
   kind: string;
+  /** 记录里的行号，界面按它合并去重。 */
+  seq?: number;
+  /** kind 为 turn 时：running / idle。 */
+  state?: string;
+  /** kind 为 turn、state 为 idle 时：ok / interrupted / error。 */
+  outcome?: string;
   text?: string;
   name?: string;
   from?: string;
@@ -361,37 +369,29 @@ export function sessionHistory(base: string, id: string) {
   return request<{ session: ChatSession | null; messages: ChatEvent[] }>(base, `/api/sessions/${encodeURIComponent(id)}`);
 }
 
-export async function sendMessage(base: string, id: string, text: string, onEvent: (event: ChatEvent) => void) {
-  const response = await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/messages`, {
+/**
+ * 发起一轮。只回「受理了没有」：202 表示用户消息已写进记录，之后的内容都从 subscribeSessions 推来。
+ * 会话已有一轮在跑时后端拒绝（HTTP 409），不排队。
+ */
+export function sendMessage(base: string, id: string, text: string) {
+  return request<{ ok: boolean }>(base, `/api/sessions/${encodeURIComponent(id)}/messages`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
   });
-  if (!response.ok || !response.body) {
-    const body = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(body?.message || `发送失败（HTTP ${response.status}）`);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let pending = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    pending += decoder.decode(value, { stream: true });
-    const chunks = pending.split("\n\n");
-    pending = chunks.pop() ?? "";
-    for (const chunk of chunks) {
-      const data = chunk.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
-      if (!data) continue;
-      onEvent(JSON.parse(data) as ChatEvent);
-    }
-  }
 }
 
-export function subscribeSessions(base: string, onEvent: (event: { kind: string; session?: ChatSession; sessionId?: string; focus?: boolean; event?: ChatEvent }) => void) {
+export type SessionPush = { kind: string; session?: ChatSession; sessionId?: string; focus?: boolean; event?: ChatEvent };
+
+/** onOpen 在每次连上（含断线重连）时调用：调用方应重读列表和当前会话，补上断开期间漏掉的记录。 */
+export function subscribeSessions(base: string, onEvent: (event: SessionPush) => void, onOpen?: () => void) {
   const source = new EventSource(`${base}/api/sessions/events`);
+  source.onopen = () => onOpen?.();
   source.onmessage = (message) => {
-    onEvent(JSON.parse(message.data));
+    try {
+      onEvent(JSON.parse(message.data) as SessionPush);
+    } catch {
+      /* 忽略无法解析的推送 */
+    }
   };
   return () => source.close();
 }
@@ -450,7 +450,7 @@ export function saveCodebuddy(
   base: string,
   input: { model: string; environment: CodebuddySettings["environment"]; chatPermission?: ChatPermission; apiKey?: string; clearApiKey?: boolean },
 ) {
-  return request<CodebuddySettings>(base, "/api/codebuddy", { method: "PUT", body: JSON.stringify(input) });
+  return request<CodebuddySettings & { restartDeferred?: boolean }>(base, "/api/codebuddy", { method: "PUT", body: JSON.stringify(input) });
 }
 
 export function getLogs(base: string, page: number, level: string, query: string, pageSize?: number) {

@@ -150,13 +150,16 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
       setHasApiKey(saved.hasApiKey);
       setApiKeySource(saved.apiKeySource ?? (saved.hasApiKey ? "panel" : ""));
       setModelTone("ok");
+      const later = saved.restartDeferred ? "当前对话结束后" : "之后的对话";
       setModelStatus(clearApiKey
         ? saved.apiKeySource === "dec"
-          ? "已清除本机密钥，之后的对话改用 Dec 下发的密钥。"
+          ? `已清除本机密钥，${later}改用 Dec 下发的密钥。`
           : saved.apiKeySource === "env"
-            ? "已清除本机密钥，之后的对话改用环境变量 CODEBUDDY_API_KEY。"
+            ? `已清除本机密钥，${later}改用环境变量 CODEBUDDY_API_KEY。`
             : "已清除本机密钥。本机也没有 Dec 下发或环境变量里的密钥，会话会要求先登录 CodeBuddy。"
-        : "已保存。会话进程已重启，之后的对话使用新的模型、密钥、类型和会话权限。");
+        : saved.restartDeferred
+          ? "已保存。有对话正在进行，不打断它；它结束后会话进程自动重启，之后的对话使用新配置。"
+          : "已保存。会话进程已重启，之后的对话使用新的模型、密钥、类型和会话权限。");
     } catch (caught) {
       setModelTone("err");
       setModelStatus(caught instanceof Error ? caught.message : "保存失败");

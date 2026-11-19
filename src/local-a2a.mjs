@@ -509,8 +509,8 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
         if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
         const saved = codebuddy.save(body.data ?? {});
         if (!saved.ok) return json(res, 422, { ok: false, errors: saved.errors ?? [saved.reason] });
-        chat?.reload?.();
-        json(res, 200, { ok: true, ...saved.public });
+        const reloaded = chat?.reload?.();
+        json(res, 200, { ok: true, ...saved.public, restartDeferred: Boolean(reloaded?.deferred) });
       }).catch((error) => json(res, 500, { ok: false, message: error.message }));
       return;
     }
@@ -689,10 +689,23 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
     }
     if (req.method === "GET" && url.pathname === "/api/sessions/events") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-      const unsubscribe = peer?.subscribe?.((event) => {
+      req.setTimeout(0);
+      res.setTimeout(0);
+      const write = (event) => {
+        if (res.writableEnded || res.destroyed) return;
         try { res.write(`data: ${JSON.stringify(event)}\n\n`); } catch { /* 页面已离开 */ }
+      };
+      // 先发一行注释让浏览器触发 onopen；界面以 onopen 为准重读历史，补上断线期间漏掉的记录
+      res.write(": open\n\n");
+      const offChat = chat?.subscribe?.(write);
+      const offPeer = peer?.subscribe?.(write);
+      const keepAlive = setInterval(() => write({ kind: "ping" }), 25_000);
+      keepAlive.unref?.();
+      req.on("close", () => {
+        clearInterval(keepAlive);
+        offChat?.();
+        offPeer?.();
       });
-      req.on("close", () => unsubscribe?.());
       return;
     }
     if (url.pathname === "/api/sessions" && req.method === "POST") {
@@ -704,7 +717,7 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       }).then((result) => json(res, 201, result)).catch((error) => json(res, 503, { ok: false, message: error.message }));
       return;
     }
-    const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)(?:\/(messages|interrupt|answer))?$/);
+    const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)(?:\/(messages|interrupt|answer|approve))?$/);
     if (sessionMatch) {
       const sessionId = decodeURIComponent(sessionMatch[1]);
       const action = sessionMatch[2];
@@ -759,22 +772,20 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       }
       if (req.method === "POST" && action === "messages") {
         if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
-        readJsonBody(req, 256 * 1024).then(async (body) => {
+        readJsonBody(req, 256 * 1024).then((body) => {
           if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
-          req.setTimeout(0);
-          res.setTimeout(0);
-          res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-          try {
-            const result = await chat.send(sessionId, body.data?.text ?? "", (event) => {
-              if (res.writableEnded || res.destroyed) return;
-              res.write(`data: ${JSON.stringify(event)}\n\n`);
-            });
-            res.write(`data: ${JSON.stringify({ kind: "result", session: result.session })}\n\n`);
-            res.end();
-          } catch (error) {
-            res.write(`data: ${JSON.stringify({ kind: "error", text: error.message })}\n\n`);
-            res.end();
-          }
+          // 只回「受理了没有」：用户消息写进记录后就返回 202，之后的一切都经 /api/sessions/events 推给界面
+          return new Promise((resolve, reject) => {
+            chat.send(sessionId, body.data?.text ?? "", null, { onAccepted: resolve }).then(resolve, reject);
+          }).then(
+            () => json(res, 202, { ok: true }),
+            (error) => {
+              const status = { busy: 409, empty: 400, missing: 404 }[error.code] ?? 503;
+              json(res, status, { ok: false, code: error.code ?? "unavailable", message: error.message });
+            },
+          );
+        }).catch((error) => {
+          if (!res.headersSent) json(res, 500, { ok: false, message: error.message });
         });
         return;
       }

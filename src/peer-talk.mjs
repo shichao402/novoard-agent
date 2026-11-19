@@ -57,8 +57,8 @@ export function createPeerTalk({ agentId, profile, targets, tunnel, chat, stateD
   }
 
   function append(id, event) {
-    store.append(id, event);
-    emit({ kind: "message", sessionId: id, event });
+    const row = store.append(id, event);
+    emit({ kind: "message", sessionId: id, event: row ?? event });
   }
 
   function visibleText(text, parts) {
@@ -95,7 +95,21 @@ export function createPeerTalk({ agentId, profile, targets, tunnel, chat, stateD
     return composeReply({ text: message.text, profile: currentProfile, targets: currentTargets });
   }
 
-  async function askModel({ from, text, peerSessionId }) {
+  // 同一成员的消息排在一条链上交给模型：会话同时只跑一轮，第二条不等的话会被拒
+  const modelChains = new Map();
+
+  function askModel(message) {
+    const key = message.peerSessionId;
+    const previous = modelChains.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(() => askModelNow(message));
+    modelChains.set(key, next);
+    next.finally(() => {
+      if (modelChains.get(key) === next) modelChains.delete(key);
+    }).catch(() => {});
+    return next;
+  }
+
+  async function askModelNow({ from, text, peerSessionId }) {
     const title = from || "其他成员";
     let sessionId = modelSessions.get(peerSessionId);
     if (!sessionId) {
@@ -227,6 +241,7 @@ export function createPeerTalk({ agentId, profile, targets, tunnel, chat, stateD
     has: (id) => Boolean(store.get(id)),
     remove(id) {
       store.remove(id);
+      emit({ kind: "session_removed", sessionId: id });
       return { ok: true };
     },
     subscribe(listener) {

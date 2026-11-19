@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronRight, Loader2, Plus, ShieldAlert, Square, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -19,83 +19,115 @@ import {
   type ChatPermission,
   type ChatSession,
 } from "@/lib/api";
-import { applyToolEvent, groupTitle, settleCalls, type ToolCall } from "@/lib/chat-tools.mjs";
+import { groupTitle, type ToolCall } from "@/lib/chat-tools.mjs";
+import {
+  buildBubbles,
+  mergeLog,
+  turnProgress,
+  turnRunning,
+  type ApprovalBubble as LogApproval,
+  type Bubble as LogBubble,
+  type QuestionBubble,
+  type TextBubble,
+  type ToolGroupBubble as LogToolGroup,
+} from "@/lib/chat-log.mjs";
 import { prefixHeights, resolveWindow } from "@/lib/sliding-window.mjs";
 
 const PERMISSION_LABELS: Record<ChatPermission, string> = { readonly: "只读", confirm: "逐次确认", full: "完全放行" };
 
-type TextBubble = { id: string; role: "user" | "assistant" | "error" | "status"; text: string };
-/** 白名单外的工具等用户放行。decision 为空表示还在等。 */
-type ApprovalBubble = {
-  id: string;
-  role: "approval";
-  approvalId: string;
-  tool: string;
-  summary: string;
-  detail: string;
-  reason: string;
-  decision?: ApprovalDecision | "cancel";
-  open: boolean;
-};
-type QuestionBubble = {
-  id: string;
-  role: "question";
-  questionId: string;
-  questions: AskQuestion[];
-  answers?: Record<string, string>;
-  skipped?: boolean;
-  pending: boolean;
-  live: boolean;
-};
-/** 连续的工具调用合成一组；展开状态放在数据里，改变时外层滚动容器才会重新量高度。 */
-type ToolGroupBubble = { id: string; role: "tools"; calls: ToolCall[]; open: boolean; openCalls: string[] };
+/** 展开状态不在记录里，单独存；合进气泡后，变化时外层滚动容器才会重新量高度。 */
+type ApprovalBubble = LogApproval & { open: boolean };
+type ToolGroupBubble = LogToolGroup & { open: boolean; openCalls: string[] };
 type Bubble = TextBubble | QuestionBubble | ToolGroupBubble | ApprovalBubble;
 type Slice = { start: number; end: number };
 type ToggleTool = (bubbleId: string, callKey?: string) => void;
 type Approve = (approvalId: string, decision: ApprovalDecision) => Promise<void>;
+/** 当前会话的记录。sessionId 用来丢掉切走之后才到的旧会话数据。 */
+type SessionLog = { sessionId: string | null; rows: ChatEvent[] };
 
 const PIN_SLOP_PX = 64;
+const NO_ROWS: ChatEvent[] = [];
 
-let bubbleSeq = 0;
-function bubble(role: TextBubble["role"], text: string): TextBubble {
-  bubbleSeq += 1;
-  return { id: `${role}-${bubbleSeq}`, role, text };
+function message(caught: unknown, fallback: string) {
+  return caught instanceof Error ? caught.message : fallback;
 }
 
+function seconds(from: string, now: number) {
+  const at = Date.parse(from);
+  return Number.isFinite(at) ? Math.max(0, Math.round((now - at) / 1000)) : 0;
+}
+
+function withOpen(items: LogBubble[], open: Set<string>): Bubble[] {
+  return items.map((item) => {
+    if (item.role === "approval") return { ...item, open: open.has(item.id) };
+    if (item.role === "tools") {
+      const prefix = `${item.id}::`;
+      const openCalls = [...open].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length));
+      return { ...item, open: open.has(item.id), openCalls };
+    }
+    return item;
+  });
+}
+
+/**
+ * 聊天页只是后端会话记录的视图：
+ * - 看到的气泡全部来自记录（历史接口 + 实时推送，按 seq 合并），发送时不在本地先画；
+ * - 「是否在跑」看记录里最后一条 turn 行，没有时看会话索引上的 running；
+ * - 发送只问后端受理没有，忙时后端直接拒绝；
+ * - 推送连上（含重连）、切换会话、重新进入页面时都重读记录。
+ * 所以切走再切回、断线重连、刷新页面，看到的都是同一个状态。
+ */
 export function ChatPage({ base }: { base: string }) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [active, setActive] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Bubble[]>([]);
+  const [log, setLog] = useState<SessionLog>({ sessionId: null, rows: [] });
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [draft, setDraft] = useState("");
-  const [streaming, setStreaming] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [doctor, setDoctor] = useState("");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
-  const streamingRef = useRef(false);
+  const [now, setNow] = useState(() => Date.now());
   const activeRef = useRef<string | null>(null);
 
-  async function refresh(selectId?: string) {
-    const body = await listSessions(base);
-    const sessionsNext = body.sessions ?? [];
-    setSessions(sessionsNext);
-    const next = selectId && sessionsNext.some((item) => item.id === selectId)
-      ? selectId
-      : sessionsNext.some((item) => item.id === active) && !selectId
-        ? active
-        : sessionsNext[0]?.id ?? null;
-    setActive(next);
-    return next;
-  }
+  const select = useCallback((id: string | null) => {
+    if (activeRef.current === id) return;
+    activeRef.current = id;
+    setActive(id);
+    setLog({ sessionId: id, rows: [] });
+    setOpen(new Set());
+    setError("");
+  }, []);
+
+  const loadHistory = useCallback((id: string) => {
+    void sessionHistory(base, id)
+      .then((body) => {
+        if (activeRef.current !== id) return;
+        setLog((current) => (current.sessionId === id ? { sessionId: id, rows: mergeLog(current.rows, body.messages) } : current));
+        if (body.session) {
+          const session = body.session;
+          setSessions((current) => current.map((item) => (item.id === id ? session : item)));
+        }
+      })
+      .catch((caught: unknown) => setError(message(caught, "无法读取记录")));
+  }, [base]);
+
+  /** 重读会话列表；当前会话还在就留在它上面，否则选第一个。 */
+  const loadSessions = useCallback((preferId?: string) => {
+    return listSessions(base).then((body) => {
+      const next = body.sessions ?? [];
+      setSessions(next);
+      const want = preferId ?? activeRef.current;
+      const keep = want && next.some((item) => item.id === want) ? want : next[0]?.id ?? null;
+      select(keep);
+      if (keep) loadHistory(keep);
+      return keep;
+    });
+  }, [base, loadHistory, select]);
 
   useEffect(() => {
     let cancelled = false;
-    void listSessions(base)
-      .then((body) => {
-        if (cancelled) return;
-        setSessions(body.sessions ?? []);
-        setActive(body.sessions?.[0]?.id ?? null);
-      })
-      .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "无法读取会话"));
     void agentDoctor(base)
       .then((result) => {
         if (cancelled) return;
@@ -103,163 +135,137 @@ export function ChatPage({ base }: { base: string }) {
         const permission = result.permission ? PERMISSION_LABELS[result.permission] : "";
         setDoctor(permission ? `${status} · 会话权限：${permission}` : status);
       })
-      .catch((caught: unknown) => { if (!cancelled) setDoctor(caught instanceof Error ? caught.message : "模型运行时不可用"); });
+      .catch((caught: unknown) => { if (!cancelled) setDoctor(message(caught, "模型运行时不可用")); });
     return () => { cancelled = true; };
   }, [base]);
 
   useEffect(() => {
-    if (!active) {
-      setMessages([]);
+    void loadSessions().catch((caught: unknown) => setError(message(caught, "无法读取会话")));
+    return subscribeSessions(
+      base,
+      (push) => {
+        if (push.kind === "session" && push.session) {
+          const session = push.session;
+          setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+          if (push.focus && activeRef.current !== session.id) {
+            select(session.id);
+            loadHistory(session.id);
+          }
+          return;
+        }
+        if (push.kind === "session_removed" && push.sessionId) {
+          const removed = push.sessionId;
+          setSessions((current) => {
+            const next = current.filter((item) => item.id !== removed);
+            if (activeRef.current === removed) {
+              const fallback = next[0]?.id ?? null;
+              select(fallback);
+              if (fallback) loadHistory(fallback);
+            }
+            return next;
+          });
+          return;
+        }
+        if (push.kind === "message" && push.sessionId && push.event) {
+          const sessionId = push.sessionId;
+          const row = push.event;
+          setLog((current) => (current.sessionId === sessionId ? { sessionId, rows: mergeLog(current.rows, [row]) } : current));
+        }
+      },
+      // 每次连上都重读一遍，补上没连着的那段时间里漏掉的记录
+      () => { void loadSessions().catch(() => {}); },
+    );
+  }, [base, loadHistory, loadSessions, select]);
+
+  const activeSession = sessions.find((item) => item.id === active) ?? null;
+  const rows = log.sessionId === active ? log.rows : NO_ROWS;
+  const running = turnRunning(rows, activeSession?.running);
+  const progress = turnProgress(rows, running, activeSession?.updatedAt);
+  const bubbles = useMemo(() => withOpen(buildBubbles(rows, running), open), [rows, running, open]);
+
+  useEffect(() => {
+    if (!running) {
+      setStopping(null);
       return;
     }
-    let cancelled = false;
-    void sessionHistory(base, active)
-      .then((body) => {
-        if (cancelled || streamingRef.current) return;
-        setMessages(eventsToBubbles(body.messages));
-      })
-      .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "无法读取记录"));
-    return () => { cancelled = true; };
-  }, [active, base]);
-
-  useEffect(() => {
-    activeRef.current = active;
-  }, [active]);
-
-  useEffect(() => {
-    return subscribeSessions(base, (event) => {
-      if (event.kind === "session" && event.session) {
-        setSessions((current) => [event.session!, ...current.filter((item) => item.id !== event.session!.id)]);
-        if (event.focus) {
-          activeRef.current = event.session.id;
-          setActive(event.session.id);
-        }
-        return;
-      }
-      if (event.kind === "message" && event.sessionId && event.sessionId === activeRef.current && event.event) {
-        const incoming = event.event;
-        setMessages((current) => appendEvent(current, incoming));
-      }
-    });
-  }, [base]);
-
-  useEffect(() => {
-    if (streaming) return;
-    setMessages((current) => {
-      if (!current.some((item) => (item.role === "question" && item.pending && item.live) || (item.role === "approval" && !item.decision) || (item.role === "tools" && item.calls.some((call) => call.status === "running")))) return current;
-      return current.map((item) => {
-        if (item.role === "question" && item.pending && item.live) return { ...item, pending: false, live: false, skipped: true };
-        if (item.role === "approval" && !item.decision) return { ...item, decision: "cancel" };
-        if (item.role === "tools") {
-          const calls = settleCalls(item.calls);
-          return calls === item.calls ? item : { ...item, calls };
-        }
-        return item;
-      });
-    });
-  }, [streaming]);
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [running]);
 
   const toggleTool: ToggleTool = (bubbleId, callKey) => {
-    setMessages((current) => current.map((item) => {
-      if (item.id === bubbleId && item.role === "approval") return { ...item, open: !item.open };
-      if (item.id !== bubbleId || item.role !== "tools") return item;
-      if (callKey === undefined) return { ...item, open: !item.open };
-      const openCalls = item.openCalls.includes(callKey)
-        ? item.openCalls.filter((key) => key !== callKey)
-        : [...item.openCalls, callKey];
-      return { ...item, openCalls };
-    }));
+    const key = callKey === undefined ? bubbleId : `${bubbleId}::${callKey}`;
+    setOpen((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   };
 
+  // 回答和授权只提交给后端；卡片什么时候收起，看记录里的 answer / approval_result 行
   async function submitAnswer(questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) {
     if (!active) throw new Error("没有正在进行的会话");
     await answerQuestion(base, active, questionId, body);
-    setMessages((current) => current.map((item) => (
-      item.role === "question" && item.questionId === questionId
-        ? { ...item, pending: false, live: false, skipped: Boolean(body.skip), answers: body.answers }
-        : item
-    )));
   }
 
   async function submitApproval(approvalId: string, decision: ApprovalDecision) {
     if (!active) throw new Error("没有正在进行的会话");
     await approveTool(base, active, approvalId, decision);
-    setMessages((current) => current.map((item) => (
-      item.role === "approval" && item.approvalId === approvalId ? { ...item, decision } : item
-    )));
   }
 
   async function start() {
     setError("");
     const created = await createSession(base);
-    await refresh(created.session.id);
-    setMessages([]);
+    await loadSessions(created.session.id);
   }
 
   async function send() {
     const text = draft.trim();
-    if (!text || streaming) return;
-    setDraft("");
+    if (!text || sending || running) return;
     setError("");
-    setStreaming(true);
-    streamingRef.current = true;
-    setMessages((current) => [...current, bubble("user", text)]);
-    let sessionId = active;
-    if (!sessionId) {
-      const created = await createSession(base);
-      sessionId = created.session.id;
-      await refresh(sessionId);
-    }
-    let assistantId = "";
+    setSending(true);
     try {
-      await sendMessage(base, sessionId, text, (event) => {
-        if (event.kind === "delta" && event.text) {
-          setMessages((current) => {
-            if (!assistantId) {
-              const next = bubble("assistant", event.text || "");
-              assistantId = next.id;
-              return [...current, next];
-            }
-            return current.map((item) => (item.id === assistantId && item.role === "assistant" ? { ...item, text: item.text + (event.text ?? "") } : item));
-          });
-          return;
-        }
-        if (event.kind === "assistant" && event.text) {
-          setMessages((current) => {
-            if (!assistantId) return [...current, bubble("assistant", event.text || "")];
-            return current.map((item) => (item.id === assistantId && item.role === "assistant" ? { ...item, text: event.text || item.text } : item));
-          });
-          return;
-        }
-        if (event.kind === "question" && event.questionId) {
-          setMessages((current) => {
-            if (current.some((item) => item.role === "question" && item.questionId === event.questionId)) return current;
-            return [...current, questionBubble(event, true)];
-          });
-          return;
-        }
-        if (event.kind === "answer" && event.questionId) {
-          setMessages((current) => current.map((item) => (
-            item.role === "question" && item.questionId === event.questionId
-              ? { ...item, pending: false, live: false, answers: event.answers, skipped: Boolean(event.skipped) }
-              : item
-          )));
-          return;
-        }
-        if (event.kind === "tool" || event.kind === "tool_result") assistantId = "";
-        setMessages((current) => appendEvent(current, event));
-        if (event.kind === "error" && event.text) setError(event.text);
-      });
-      const body = await listSessions(base);
-      setSessions(body.sessions ?? []);
+      let sessionId = active;
+      if (!sessionId) {
+        const created = await createSession(base);
+        sessionId = await loadSessions(created.session.id);
+        if (!sessionId) throw new Error("无法新建会话");
+      }
+      await sendMessage(base, sessionId, text);
+      // 受理之后才清空输入框；被拒（例如上一轮还没结束）时草稿留着
+      setDraft((current) => (current.trim() === text ? "" : current));
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "发送失败";
-      setError(message);
-      setMessages((current) => [...current, bubble("error", message)]);
+      setError(message(caught, "发送失败"));
     } finally {
-      streamingRef.current = false;
-      setStreaming(false);
+      setSending(false);
     }
+  }
+
+  async function stop() {
+    if (!active || stopping) return;
+    const id = active;
+    setStopping(id);
+    try {
+      await interruptSession(base, id);
+    } catch (caught) {
+      setStopping(null);
+      setError(message(caught, "停止失败"));
+    }
+  }
+
+  let progressText = "";
+  if (progress) {
+    const elapsed = seconds(progress.startedAt, now);
+    const quiet = seconds(progress.lastAt, now);
+    const doing = stopping === active
+      ? "正在停止…"
+      : progress.tool
+        ? `正在执行：${progress.tool}`
+        : quiet >= 10
+          ? `模型思考中（${quiet} 秒没有新输出）`
+          : "模型思考中";
+    progressText = `已进行 ${elapsed} 秒 · ${doing}`;
   }
 
   return (
@@ -267,7 +273,7 @@ export function ChatPage({ base }: { base: string }) {
       <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-panel">
         <div className="flex items-center justify-between border-b border-line px-3 py-2">
           <span className="text-xs text-muted">会话</span>
-          <Button variant="ghost" size="icon" aria-label="新对话" onClick={() => void start().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "无法新建会话"))}>
+          <Button variant="ghost" size="icon" aria-label="新对话" onClick={() => void start().catch((caught: unknown) => setError(message(caught, "无法新建会话")))}>
             <Plus size={16} />
           </Button>
         </div>
@@ -277,9 +283,16 @@ export function ChatPage({ base }: { base: string }) {
             <button
               key={session.id}
               className={`mb-1 w-full rounded-lg px-3 py-2 text-left ${session.id === active ? "bg-panel-hi" : "hover:bg-panel-hi/60"}`}
-              onClick={() => setActive(session.id)}
+              onClick={() => {
+                if (session.id === activeRef.current) return;
+                select(session.id);
+                loadHistory(session.id);
+              }}
             >
-              <div className="truncate text-[13px]">{session.title || "新对话"}</div>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="min-w-0 flex-1 truncate text-[13px]">{session.title || "新对话"}</span>
+                {session.running ? <Loader2 size={12} className="shrink-0 animate-spin text-muted" aria-label="进行中" /> : null}
+              </div>
               <div className="truncate text-[11px] text-faint">{session.preview || "尚无消息"}</div>
             </button>
           ))}
@@ -292,7 +305,13 @@ export function ChatPage({ base }: { base: string }) {
             <Trash2 size={14} />删除
           </Button>
         </div>
-<MessageScroller messages={messages} resetKey={active} onAnswer={submitAnswer} onApprove={submitApproval} onToggle={toggleTool} />
+        <MessageScroller messages={bubbles} resetKey={active} onAnswer={submitAnswer} onApprove={submitApproval} onToggle={toggleTool} />
+        {progressText ? (
+          <p className="flex items-center gap-1.5 px-4 pb-1 text-xs leading-5 text-muted" aria-live="polite">
+            <Loader2 size={12} className="shrink-0 animate-spin" />
+            <span className="truncate">{progressText}</span>
+          </p>
+        ) : null}
         {error ? <p className="px-4 pb-2 text-xs leading-5 text-bad" role="alert">{error}</p> : null}
         <form
           className="flex items-end gap-2 border-t border-line p-3"
@@ -311,13 +330,18 @@ export function ChatPage({ base }: { base: string }) {
               }
             }}
             rows={2}
-            placeholder="给这台 Agent 发消息。Enter 发送，Shift+Enter 换行"
+            placeholder={running ? "这一轮结束后才能再发。可以先写好，或者点停止" : "给这台 Agent 发消息。Enter 发送，Shift+Enter 换行"}
             className="max-h-36 min-h-10 flex-1 resize-none rounded-lg border border-line-hi bg-surface px-3 py-2 text-[13px] outline-none focus:border-accent"
           />
-          {streaming ? (
-            <Button type="button" variant="secondary" onClick={() => active && void interruptSession(base, active)}><Square size={14} />停止</Button>
+          {running ? (
+            <Button type="button" variant="secondary" disabled={stopping === active} onClick={() => void stop()}>
+              {stopping === active ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
+              {stopping === active ? "正在停止…" : "停止"}
+            </Button>
           ) : (
-            <Button type="submit" variant="accent" disabled={!draft.trim()}>发送</Button>
+            <Button type="submit" variant="accent" disabled={!draft.trim() || sending}>
+              {sending ? <Loader2 size={14} className="animate-spin" /> : null}发送
+            </Button>
           )}
         </form>
       </section>
@@ -331,7 +355,7 @@ export function ChatPage({ base }: { base: string }) {
           const id = pendingDelete;
           setPendingDelete(null);
           if (!id) return;
-          void deleteSession(base, id).then(() => refresh()).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "删除失败"));
+          void deleteSession(base, id).then(() => loadSessions()).catch((caught: unknown) => setError(message(caught, "删除失败")));
         }}
       />
     </div>
@@ -534,109 +558,6 @@ function MessageScroller({
   );
 }
 
-function toBubble(event: ChatEvent): TextBubble | null {
-  if (event.kind === "peer" && event.text) return bubble("user", event.from ? `${event.from}：${event.text}` : event.text);
-  if (event.kind === "user" && event.text) return bubble("user", event.text);
-  if (event.kind === "assistant" && event.text) return bubble("assistant", event.text);
-  if (event.kind === "error" && event.text) return bubble("error", event.text);
-  if (event.kind === "status" && event.text) return bubble("status", event.text);
-  if (event.kind === "done" && event.ok === false && event.text) return bubble("error", event.text);
-  return null;
-}
-
-function toolGroup(calls: ToolCall[]): ToolGroupBubble {
-  bubbleSeq += 1;
-  return { id: `tools-${bubbleSeq}`, role: "tools", calls, open: false, openCalls: [] };
-}
-
-/** 把一条事件并进气泡列表：工具调用和结果进最近的工具组，其余按原样追加。 */
-function appendEvent(current: Bubble[], event: ChatEvent): Bubble[] {
-  if (event.kind === "approval" && event.approvalId) {
-    if (current.some((item) => item.role === "approval" && item.approvalId === event.approvalId)) return current;
-    return [...current, {
-      id: `approval-${event.approvalId}`,
-      role: "approval",
-      approvalId: event.approvalId,
-      tool: event.tool || "工具",
-      summary: event.summary || "",
-      detail: event.detail || "",
-      reason: event.reason || "",
-      open: false,
-    }];
-  }
-  if (event.kind === "approval_result" && event.approvalId) {
-    return current.map((item) => (
-      item.role === "approval" && item.approvalId === event.approvalId ? { ...item, decision: event.decision ?? "cancel" } : item
-    ));
-  }
-  if (event.kind === "tool" && event.name === "AskUserQuestion") return current;
-  if (event.kind === "tool" || event.kind === "tool_result") {
-    // 结果可能落在中间夹了状态行的更早一组里，按 id 往回找
-    if (event.kind === "tool_result" && event.toolUseId) {
-      for (let index = current.length - 1; index >= 0; index -= 1) {
-        const item = current[index];
-        if (item.role === "tools" && item.calls.some((call) => call.toolUseId === event.toolUseId)) {
-          const next = current.slice();
-          next[index] = { ...item, calls: applyToolEvent(item.calls, event) };
-          return next;
-        }
-      }
-    }
-    const last = current[current.length - 1];
-    if (last && last.role === "tools") return [...current.slice(0, -1), { ...last, calls: applyToolEvent(last.calls, event) }];
-    return [...current, toolGroup(applyToolEvent([], event))];
-  }
-  const next = toBubble(event);
-  return next ? [...current, next] : current;
-}
-
-function eventsToBubbles(events: ChatEvent[]): Bubble[] {
-  let bubbles: Bubble[] = [];
-  const byQuestion = new Map<string, QuestionBubble>();
-  // 旧记录里 AskUserQuestion 的结果没带 id，紧跟在问答之后，跳过一条
-  let skipLegacyAnswer = false;
-  for (const event of events) {
-    if (event.kind === "question" && event.questionId) {
-      const item = questionBubble(event, false);
-      byQuestion.set(event.questionId, item);
-      bubbles.push(item);
-      skipLegacyAnswer = true;
-      continue;
-    }
-    if (event.kind === "answer" && event.questionId) {
-      const item = byQuestion.get(event.questionId);
-      if (item) {
-        item.pending = false;
-        item.answers = event.answers;
-        item.skipped = Boolean(event.skipped);
-      }
-      continue;
-    }
-    if (event.kind === "tool_result" && !event.toolUseId && skipLegacyAnswer) {
-      skipLegacyAnswer = false;
-      continue;
-    }
-    if (event.kind === "tool" || event.kind === "assistant") skipLegacyAnswer = false;
-    bubbles = appendEvent(bubbles, event);
-  }
-  return bubbles.map((item) => {
-    if (item.role !== "tools") return item;
-    const calls = settleCalls(item.calls);
-    return calls === item.calls ? item : { ...item, calls };
-  });
-}
-
-function questionBubble(event: ChatEvent, live: boolean): QuestionBubble {
-  return {
-    id: `question-${event.questionId}`,
-    role: "question",
-    questionId: event.questionId || "",
-    questions: event.questions ?? [],
-    pending: true,
-    live,
-  };
-}
-
 function MessageView({
   item,
   onAnswer,
@@ -745,13 +666,13 @@ function ApprovalCard({ item, onApprove, onToggle }: { item: ApprovalBubble; onA
     setSubmitting(true);
     try {
       await onApprove(item.approvalId, decision);
+      return; // 成功后不解除禁用，记录里的 approval_result 到了卡片自然收起
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "提交失败";
       if (message.includes("已经结束")) setNote("这次授权已经结束");
       else setError(message);
-    } finally {
-      setSubmitting(false);
     }
+    setSubmitting(false);
   }
 
   return (
@@ -845,13 +766,13 @@ function QuestionCard({
     setSubmitting(true);
     try {
       await onAnswer(item.questionId, skip ? { skip: true } : { answers });
+      return; // 成功后不解除禁用，记录里的 answer 到了卡片自然收起
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "提交失败";
       if (message.includes("已经结束")) setNote("这次提问已经结束");
       else setError(message);
-    } finally {
-      setSubmitting(false);
     }
+    setSubmitting(false);
   }
 
   if (closed) {

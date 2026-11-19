@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readCodebuddyConfig, resolveCodebuddyConfig, codebuddyProcessEnv } from "./codebuddy-config.mjs";
+import { closeOpenTurns, createSessionStore } from "./session-store.mjs";
 import { edition } from "./edition.mjs";
 
 function moduleDir() {
@@ -79,7 +80,45 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
   let seq = 1;
   let starting = null;
   let spawnedFingerprint = "";
+  let restartPending = false;
   const pending = new Map();
+  const listeners = new Set();
+
+  function notify(payload) {
+    for (const listener of listeners) {
+      try { listener(payload); } catch (error) { log.warn?.(`[chat] 订阅回调失败：${error.message}`); }
+    }
+  }
+
+  /** 有轮次在跑（发送请求还没结束）。 */
+  function busy() {
+    for (const item of pending.values()) if (item.op === "send") return true;
+    return false;
+  }
+
+  /** 设置里改了配置但当时有轮次在跑：等手上的请求全部结束再重启（含停止等短请求，不能误伤）。 */
+  function settle() {
+    if (!restartPending || pending.size > 0) return;
+    restartPending = false;
+    log.info?.("[chat] 进行中的对话已结束，按新配置重启会话进程");
+    restart();
+  }
+
+  /**
+   * 会话进程没了，它手上没跑完的轮次由这里收尾：写进记录并推给界面，
+   * 这样重新打开页面看到的也是「这一轮没有完成」，而不是一直转圈。
+   */
+  function closeTurnsAfterExit(reason) {
+    try {
+      const store = createSessionStore(sessionDir);
+      for (const item of closeOpenTurns(store, `${reason}，这一轮没有完成。`)) {
+        for (const event of item.events) notify({ kind: "message", sessionId: item.sessionId, event });
+        notify({ kind: "session", session: item.session });
+      }
+    } catch (error) {
+      log.warn?.(`[chat] 收尾未完成的对话失败：${error.message}`);
+    }
+  }
 
   function currentConfig() {
     const panel = readCodebuddyConfig(codebuddyFile);
@@ -111,17 +150,28 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
         log.warn?.(`[chat] 忽略无法解析的会话输出：${line.slice(0, 180)}`);
         continue;
       }
+      if (payload.broadcast) {
+        notify(payload.broadcast);
+        continue;
+      }
       const item = pending.get(payload.id);
       if (!item) continue;
       if (payload.event) {
         try { item.onEvent?.(payload.event); } catch { /* 页面已离开，会话仍要继续 */ }
       }
+      if (payload.accepted) {
+        try { item.onAccepted?.(); } catch { /* 调用方已离开 */ }
+      }
       if (payload.error) {
         pending.delete(payload.id);
-        item.reject(new Error(payload.error));
+        const error = new Error(payload.error);
+        if (payload.code) error.code = payload.code;
+        item.reject(error);
+        settle();
       } else if (Object.prototype.hasOwnProperty.call(payload, "result")) {
         pending.delete(payload.id);
         item.resolve(payload.result);
+        settle();
       }
     }
   }
@@ -157,9 +207,13 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
       });
       proc.on("exit", (code) => {
         // 主动重启时 child 已指向新进程（或为空），旧进程的请求在 restart() 里已经处理，这里不能误伤新进程上的请求
-        if (child !== proc) return;
-        child = null;
-        failAll(new Error(code ? `模型会话进程已退出（${code}）` : "模型会话进程已退出"));
+        const reason = proc.stopReason || (code ? `模型会话进程已退出（${code}）` : "模型会话进程已退出");
+        if (child === proc) {
+          child = null;
+          failAll(new Error(reason));
+        }
+        // 新进程已经起来的话，它启动时已收尾过旧轮次，这里再收会误伤它正在跑的轮次
+        if (!child && !starting) closeTurnsAfterExit(reason);
       });
       return proc;
     }).finally(() => {
@@ -168,19 +222,20 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
     return starting;
   }
 
-  function request(op, params = {}, onEvent) {
+  function request(op, params = {}, onEvent, onAccepted) {
     const id = seq++;
     return ensure().then((proc) => new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject, onEvent });
+      pending.set(id, { op, resolve, reject, onEvent, onAccepted });
       proc.stdin.write(`${JSON.stringify({ id, op, ...params })}\n`);
     }));
   }
 
-  function restart() {
+  function restart(reason = "模型会话进程已重启") {
     const current = child;
     child = null;
     if (current) {
-      failAll(new Error("模型会话进程已重启"));
+      current.stopReason = reason;
+      failAll(new Error(reason));
       current.kill();
     }
   }
@@ -198,8 +253,9 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
       return;
     }
     if (codebuddyFingerprint(configured) === spawnedFingerprint) return;
-    if (pending.size > 0) {
-      log.info?.(`[chat] 模型配置已变化（key=${configured.apiKeySource || "无"}），还有 ${pending.size} 个请求进行中，下次新建会话时再重启`);
+    if (busy()) {
+      log.info?.(`[chat] 模型配置已变化（key=${configured.apiKeySource || "无"}），还有对话进行中，等它结束再重启`);
+      restartPending = true;
       return;
     }
     log.info?.(`[chat] 模型配置已变化（key=${configured.apiKeySource || "无"} type=${configured.environment}），重启会话进程`);
@@ -228,12 +284,34 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
       decision: payload.decision,
     }),
     doctor: () => request("doctor"),
-    send: (sessionId, text, onEvent, options = {}) => request("send", { sessionId, text, ...(options.peer ? { peer: true } : {}) }, onEvent),
+    /**
+     * 发起一轮。会话已有一轮在跑时被拒（error.code === "busy"），不排队。
+     * onAccepted 在会话进程受理（用户消息已写进记录）时调用；返回的 promise 在这一轮结束时完成。
+     */
+    send: (sessionId, text, onEvent, options = {}) => request(
+      "send",
+      { sessionId, text, ...(options.peer ? { peer: true } : {}) },
+      onEvent,
+      options.onAccepted,
+    ),
+    /** 会话进程推来的记录变化：{ kind: "message", sessionId, event } / { kind: "session", session } / { kind: "session_removed", sessionId }。 */
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    /** 设置里保存了模型配置。有对话在跑时不打断，等它结束再重启。 */
     reload() {
+      if (busy()) {
+        restartPending = true;
+        log.info?.("[chat] 模型配置已保存，有对话进行中，等它结束再重启会话进程");
+        return { deferred: true };
+      }
+      restartPending = false;
       restart();
+      return { deferred: false };
     },
     close() {
-      restart();
+      restart("会话已关闭");
       failAll(new Error("会话已关闭"));
     },
   };
