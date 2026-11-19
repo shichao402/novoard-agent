@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionStore } from "../src/session-store.mjs";
-import { explainAgentError, normalizeSdkMessage } from "../src/chat-events.mjs";
+import { explainAgentError, normalizeSdkMessage, toolResultText } from "../src/chat-events.mjs";
 import { dispatchNovoardTool } from "../src/novoard-tools.mjs";
 import { createChatBridge, locateNode } from "../src/chat-bridge.mjs";
 import { createLocalA2A } from "../src/local-a2a.mjs";
@@ -152,6 +152,35 @@ test("SDK 消息收成界面事件", () => {
   const done = normalizeSdkMessage({ type: "result", subtype: "error_during_execution", errors: ["未登录"] });
   assert.equal(done[0].ok, false);
   assert.match(explainAgentError(new Error("CodeBuddy CLI not found")), /没有找到 CodeBuddy/);
+});
+
+test("工具调用与结果带 toolUseId，结果拆成纯文本，问答结果被过滤", () => {
+  const state = { hidden: new Set() };
+  const call = normalizeSdkMessage({
+    type: "assistant",
+    message: { content: [
+      { type: "tool_use", id: "t1", name: "mcp__novoard__novoard_list_targets", input: {} },
+      { type: "tool_use", id: "q1", name: "AskUserQuestion", input: { questions: [] } },
+    ] },
+  }, state);
+  assert.deepEqual(call, [{ kind: "tool", name: "mcp__novoard__novoard_list_targets", input: {}, toolUseId: "t1" }]);
+  const inner = JSON.stringify([{ type: "text", text: "{\"ok\":true}" }]);
+  const results = normalizeSdkMessage({
+    type: "user",
+    message: { content: [
+      { type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: inner }] },
+      { type: "tool_result", tool_use_id: "q1", content: "用户选了 A" },
+      { type: "tool_result", tool_use_id: "t2", content: "Permission denied", is_error: true },
+    ] },
+  }, state);
+  assert.equal(results.length, 2);
+  assert.deepEqual(results[0], { kind: "tool_result", text: "{\"ok\":true}", toolUseId: "t1" });
+  assert.equal(results[1].isError, true);
+  assert.equal(results[1].toolUseId, "t2");
+  const long = toolResultText("x".repeat(5000));
+  assert.ok(long.length < 4100);
+  assert.match(long, /已截断，共 5000 字/);
+  assert.equal(toolResultText([{ type: "image" }]), "[图片]");
 });
 
 test("SDK 顶层 error 消息转成错误事件，恢复不存在的会话可被识别", async () => {

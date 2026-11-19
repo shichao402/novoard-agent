@@ -1,5 +1,11 @@
-/** 把 CodeBuddy SDK 消息收成界面事件。只保留用户能看懂的增量、正文和工具。 */
-export function normalizeSdkMessage(message) {
+/** 单条工具结果写进记录的上限。读大文件时结果很长，界面只需要摘要和开头一段。 */
+const TOOL_RESULT_LIMIT = 4000;
+
+/**
+ * 把 CodeBuddy SDK 消息收成界面事件。只保留用户能看懂的增量、正文和工具。
+ * state 跨消息记住一轮里要隐藏的工具调用（AskUserQuestion 由问答卡片单独展示），同一次发送内共用一个。
+ */
+export function normalizeSdkMessage(message, state = { hidden: new Set() }) {
   if (!message || typeof message !== "object") return [];
   if (message.type === "stream_event") {
     const delta = message.event?.delta;
@@ -14,9 +20,14 @@ export function normalizeSdkMessage(message) {
     const text = blocks.filter((block) => block?.type === "text" && block.text).map((block) => block.text).join("");
     if (text) events.push({ kind: "assistant", text });
     for (const block of blocks) {
-      if (block?.type === "tool_use" && block.name !== "AskUserQuestion") {
-        events.push({ kind: "tool", name: String(block.name ?? "tool"), input: block.input ?? {} });
+      if (block?.type !== "tool_use") continue;
+      if (block.name === "AskUserQuestion") {
+        if (block.id) state.hidden.add(block.id);
+        continue;
       }
+      const event = { kind: "tool", name: String(block.name ?? "tool"), input: block.input ?? {} };
+      if (block.id) event.toolUseId = String(block.id);
+      events.push(event);
     }
     if (message.error) events.push({ kind: "error", text: String(message.error) });
     return events;
@@ -24,10 +35,16 @@ export function normalizeSdkMessage(message) {
   if (message.type === "user") {
     const content = message.message?.content;
     if (!Array.isArray(content)) return [];
-    return content.filter((block) => block?.type === "tool_result").map((block) => ({
-      kind: "tool_result",
-      text: typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? ""),
-    }));
+    const events = [];
+    for (const block of content) {
+      if (block?.type !== "tool_result") continue;
+      if (block.tool_use_id && state.hidden.has(block.tool_use_id)) continue;
+      const event = { kind: "tool_result", text: toolResultText(block.content) };
+      if (block.tool_use_id) event.toolUseId = String(block.tool_use_id);
+      if (block.is_error === true) event.isError = true;
+      events.push(event);
+    }
+    return events;
   }
   if (message.type === "result") {
     if (message.subtype === "success") {
@@ -48,6 +65,30 @@ export function normalizeSdkMessage(message) {
     return [{ kind: "status", text: message.description ? `后台任务：${message.description}` : "后台任务已开始" }];
   }
   return [];
+}
+
+/**
+ * 工具结果的正文。SDK 给的是字符串或内容块数组；MCP 工具还会把内容块数组再序列化成一段文本套一层，
+ * 这里一并拆开，只留文字，图片记成占位。超长截断。
+ */
+export function toolResultText(content, depth = 0) {
+  let text;
+  if (typeof content === "string") text = content;
+  else if (Array.isArray(content)) {
+    text = content.map((block) => {
+      if (typeof block === "string") return block;
+      if (block?.type === "text") return String(block.text ?? "");
+      if (block?.type === "image") return "[图片]";
+      return "";
+    }).join("\n");
+  } else text = content == null ? "" : JSON.stringify(content);
+  if (depth < 2 && /^\s*\[\s*\{\s*"type"\s*:/.test(text)) {
+    try {
+      const inner = JSON.parse(text);
+      if (Array.isArray(inner)) return toolResultText(inner, depth + 1);
+    } catch { /* 不是内容块数组，按原文 */ }
+  }
+  return text.length > TOOL_RESULT_LIMIT ? `${text.slice(0, TOOL_RESULT_LIMIT)}\n…（已截断，共 ${text.length} 字）` : text;
 }
 
 /**

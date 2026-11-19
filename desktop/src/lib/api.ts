@@ -286,6 +286,8 @@ export type ChatEvent = {
   name?: string;
   from?: string;
   input?: unknown;
+  toolUseId?: string;
+  isError?: boolean;
   ok?: boolean;
   at?: string;
   questionId?: string;

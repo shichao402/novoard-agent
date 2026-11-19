@@ -1,4 +1,4 @@
-import { Plus, Square, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Loader2, Plus, ShieldAlert, Square, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -16,9 +16,10 @@ import {
   type ChatEvent,
   type ChatSession,
 } from "@/lib/api";
+import { applyToolEvent, groupTitle, settleCalls, type ToolCall } from "@/lib/chat-tools.mjs";
 import { prefixHeights, resolveWindow } from "@/lib/sliding-window.mjs";
 
-type TextBubble = { id: string; role: "user" | "assistant" | "tool" | "error" | "status"; text: string };
+type TextBubble = { id: string; role: "user" | "assistant" | "error" | "status"; text: string };
 type QuestionBubble = {
   id: string;
   role: "question";
@@ -29,8 +30,11 @@ type QuestionBubble = {
   pending: boolean;
   live: boolean;
 };
-type Bubble = TextBubble | QuestionBubble;
+/** 连续的工具调用合成一组；展开状态放在数据里，改变时外层滚动容器才会重新量高度。 */
+type ToolGroupBubble = { id: string; role: "tools"; calls: ToolCall[]; open: boolean; openCalls: string[] };
+type Bubble = TextBubble | QuestionBubble | ToolGroupBubble;
 type Slice = { start: number; end: number };
+type ToggleTool = (bubbleId: string, callKey?: string) => void;
 
 const PIN_SLOP_PX = 64;
 
@@ -110,8 +114,8 @@ export function ChatPage({ base }: { base: string }) {
         return;
       }
       if (event.kind === "message" && event.sessionId && event.sessionId === activeRef.current && event.event) {
-        const next = toBubble(event.event);
-        if (next) setMessages((current) => [...current, next]);
+        const incoming = event.event;
+        setMessages((current) => appendEvent(current, incoming));
       }
     });
   }, [base]);
@@ -119,14 +123,28 @@ export function ChatPage({ base }: { base: string }) {
   useEffect(() => {
     if (streaming) return;
     setMessages((current) => {
-      if (!current.some((item) => item.role === "question" && item.pending && item.live)) return current;
-      return current.map((item) => (
-        item.role === "question" && item.pending && item.live
-          ? { ...item, pending: false, live: false, skipped: true }
-          : item
-      ));
+      if (!current.some((item) => (item.role === "question" && item.pending && item.live) || (item.role === "tools" && item.calls.some((call) => call.status === "running")))) return current;
+      return current.map((item) => {
+        if (item.role === "question" && item.pending && item.live) return { ...item, pending: false, live: false, skipped: true };
+        if (item.role === "tools") {
+          const calls = settleCalls(item.calls);
+          return calls === item.calls ? item : { ...item, calls };
+        }
+        return item;
+      });
     });
   }, [streaming]);
+
+  const toggleTool: ToggleTool = (bubbleId, callKey) => {
+    setMessages((current) => current.map((item) => {
+      if (item.id !== bubbleId || item.role !== "tools") return item;
+      if (callKey === undefined) return { ...item, open: !item.open };
+      const openCalls = item.openCalls.includes(callKey)
+        ? item.openCalls.filter((key) => key !== callKey)
+        : [...item.openCalls, callKey];
+      return { ...item, openCalls };
+    }));
+  };
 
   async function submitAnswer(questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) {
     if (!active) throw new Error("没有正在进行的会话");
@@ -195,8 +213,8 @@ export function ChatPage({ base }: { base: string }) {
           )));
           return;
         }
-        const next = toBubble(event);
-        if (next) setMessages((current) => [...current, next]);
+        if (event.kind === "tool" || event.kind === "tool_result") assistantId = "";
+        setMessages((current) => appendEvent(current, event));
         if (event.kind === "error" && event.text) setError(event.text);
       });
       const body = await listSessions(base);
@@ -241,7 +259,7 @@ export function ChatPage({ base }: { base: string }) {
             <Trash2 size={14} />删除
           </Button>
         </div>
-        <MessageScroller messages={messages} resetKey={active} onAnswer={submitAnswer} />
+        <MessageScroller messages={messages} resetKey={active} onAnswer={submitAnswer} onToggle={toggleTool} />
         {error ? <p className="px-4 pb-2 text-xs leading-5 text-bad" role="alert">{error}</p> : null}
         <form
           className="flex items-end gap-2 border-t border-line p-3"
@@ -291,10 +309,12 @@ function MessageScroller({
   messages,
   resetKey,
   onAnswer,
+  onToggle,
 }: {
   messages: Bubble[];
   resetKey: string | null;
   onAnswer: (questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) => Promise<void>;
+  onToggle: ToggleTool;
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const rowEls = useRef(new Map<string, HTMLDivElement>());
@@ -470,7 +490,7 @@ function MessageScroller({
               className="absolute left-0 w-full min-w-0"
               style={{ top: prefix[view.start + offset] }}
             >
-              <MessageView item={item} onAnswer={onAnswer} />
+              <MessageView item={item} onAnswer={onAnswer} onToggle={onToggle} />
             </div>
           ))}
         </div>
@@ -483,23 +503,51 @@ function toBubble(event: ChatEvent): TextBubble | null {
   if (event.kind === "peer" && event.text) return bubble("user", event.from ? `${event.from}：${event.text}` : event.text);
   if (event.kind === "user" && event.text) return bubble("user", event.text);
   if (event.kind === "assistant" && event.text) return bubble("assistant", event.text);
-  if (event.kind === "tool" && event.name === "AskUserQuestion") return null;
-  if (event.kind === "tool") return bubble("tool", event.name || "工具");
-  if (event.kind === "tool_result" && event.text) return bubble("tool", event.text);
   if (event.kind === "error" && event.text) return bubble("error", event.text);
   if (event.kind === "status" && event.text) return bubble("status", event.text);
   if (event.kind === "done" && event.ok === false && event.text) return bubble("error", event.text);
   return null;
 }
 
+function toolGroup(calls: ToolCall[]): ToolGroupBubble {
+  bubbleSeq += 1;
+  return { id: `tools-${bubbleSeq}`, role: "tools", calls, open: false, openCalls: [] };
+}
+
+/** 把一条事件并进气泡列表：工具调用和结果进最近的工具组，其余按原样追加。 */
+function appendEvent(current: Bubble[], event: ChatEvent): Bubble[] {
+  if (event.kind === "tool" && event.name === "AskUserQuestion") return current;
+  if (event.kind === "tool" || event.kind === "tool_result") {
+    // 结果可能落在中间夹了状态行的更早一组里，按 id 往回找
+    if (event.kind === "tool_result" && event.toolUseId) {
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        const item = current[index];
+        if (item.role === "tools" && item.calls.some((call) => call.toolUseId === event.toolUseId)) {
+          const next = current.slice();
+          next[index] = { ...item, calls: applyToolEvent(item.calls, event) };
+          return next;
+        }
+      }
+    }
+    const last = current[current.length - 1];
+    if (last && last.role === "tools") return [...current.slice(0, -1), { ...last, calls: applyToolEvent(last.calls, event) }];
+    return [...current, toolGroup(applyToolEvent([], event))];
+  }
+  const next = toBubble(event);
+  return next ? [...current, next] : current;
+}
+
 function eventsToBubbles(events: ChatEvent[]): Bubble[] {
-  const bubbles: Bubble[] = [];
+  let bubbles: Bubble[] = [];
   const byQuestion = new Map<string, QuestionBubble>();
+  // 旧记录里 AskUserQuestion 的结果没带 id，紧跟在问答之后，跳过一条
+  let skipLegacyAnswer = false;
   for (const event of events) {
     if (event.kind === "question" && event.questionId) {
       const item = questionBubble(event, false);
       byQuestion.set(event.questionId, item);
       bubbles.push(item);
+      skipLegacyAnswer = true;
       continue;
     }
     if (event.kind === "answer" && event.questionId) {
@@ -511,10 +559,18 @@ function eventsToBubbles(events: ChatEvent[]): Bubble[] {
       }
       continue;
     }
-    const next = toBubble(event);
-    if (next) bubbles.push(next);
+    if (event.kind === "tool_result" && !event.toolUseId && skipLegacyAnswer) {
+      skipLegacyAnswer = false;
+      continue;
+    }
+    if (event.kind === "tool" || event.kind === "assistant") skipLegacyAnswer = false;
+    bubbles = appendEvent(bubbles, event);
   }
-  return bubbles;
+  return bubbles.map((item) => {
+    if (item.role !== "tools") return item;
+    const calls = settleCalls(item.calls);
+    return calls === item.calls ? item : { ...item, calls };
+  });
 }
 
 function questionBubble(event: ChatEvent, live: boolean): QuestionBubble {
@@ -528,8 +584,17 @@ function questionBubble(event: ChatEvent, live: boolean): QuestionBubble {
   };
 }
 
-function MessageView({ item, onAnswer }: { item: Bubble; onAnswer: (questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) => Promise<void> }) {
+function MessageView({
+  item,
+  onAnswer,
+  onToggle,
+}: {
+  item: Bubble;
+  onAnswer: (questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) => Promise<void>;
+  onToggle: ToggleTool;
+}) {
   if (item.role === "question") return <QuestionCard item={item} onAnswer={onAnswer} />;
+  if (item.role === "tools") return <ToolGroupView item={item} onToggle={onToggle} />;
   const wrap = "whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
   if (item.role === "user") {
     return (
@@ -538,12 +603,70 @@ function MessageView({ item, onAnswer }: { item: Bubble; onAnswer: (questionId: 
       </div>
     );
   }
-  if (item.role === "tool") {
-    return <div className={`w-full min-w-0 px-4 py-1.5 font-mono text-[11px] leading-5 text-muted ${wrap}`}>{item.text}</div>;
-  }
   if (item.role === "error") return <p className={`w-full min-w-0 px-4 py-1.5 text-sm leading-6 text-bad ${wrap}`}>{item.text}</p>;
   if (item.role === "status") return <p className={`w-full min-w-0 px-4 py-1.5 text-xs leading-5 text-faint ${wrap}`}>{item.text}</p>;
   return <div className={`w-full min-w-0 px-4 py-1.5 text-sm leading-6 text-ink ${wrap}`}>{item.text}</div>;
+}
+
+function ToolStatusIcon({ status }: { status: ToolCall["status"] }) {
+  if (status === "running") return <Loader2 size={13} className="shrink-0 animate-spin text-muted" />;
+  if (status === "ok") return <Check size={13} className="shrink-0 text-faint" />;
+  if (status === "denied") return <ShieldAlert size={13} className="shrink-0 text-bad" />;
+  return <X size={13} className="shrink-0 text-bad" />;
+}
+
+/**
+ * 一组工具调用。只有一步时直接显示这一行；多步时显示「执行了 N 步」，默认收起，
+ * 收起时仍露出正在执行的和失败、未授权的那几步。每一步点开看原始输出。
+ */
+function ToolGroupView({ item, onToggle }: { item: ToolGroupBubble; onToggle: ToggleTool }) {
+  const single = item.calls.length === 1;
+  const visible = single || item.open
+    ? item.calls
+    : item.calls.filter((call) => call.status !== "ok");
+  return (
+    <div className="mx-4 my-1 min-w-0 rounded-lg border border-line bg-surface/60 px-2 py-1">
+      {single ? null : (
+        <button
+          type="button"
+          className="flex w-full min-w-0 items-center gap-1.5 rounded px-1 py-1 text-left text-xs text-muted hover:bg-panel-hi/60"
+          aria-expanded={item.open}
+          onClick={() => onToggle(item.id)}
+        >
+          {item.open ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
+          <span className="truncate">{groupTitle(item.calls)}</span>
+        </button>
+      )}
+      {visible.map((call) => (
+        <ToolCallRow key={call.key} call={call} open={item.openCalls.includes(call.key)} indent={!single} onToggle={() => onToggle(item.id, call.key)} />
+      ))}
+    </div>
+  );
+}
+
+function ToolCallRow({ call, open, indent, onToggle }: { call: ToolCall; open: boolean; indent: boolean; onToggle: () => void }) {
+  const bad = call.status === "error" || call.status === "denied";
+  const canOpen = Boolean(call.detail);
+  return (
+    <div className={`min-w-0 ${indent ? "pl-4" : ""}`}>
+      <button
+        type="button"
+        disabled={!canOpen}
+        aria-expanded={canOpen ? open : undefined}
+        className="flex w-full min-w-0 items-center gap-1.5 rounded px-1 py-1 text-left text-xs enabled:hover:bg-panel-hi/60"
+        onClick={onToggle}
+      >
+        <ToolStatusIcon status={call.status} />
+        <span className="shrink-0 truncate text-ink" style={{ maxWidth: "55%" }} title={call.title}>{call.title}</span>
+        {call.summary ? <span className={`min-w-0 truncate ${bad ? "text-bad" : "text-faint"}`} title={call.summary}>{call.summary}</span> : null}
+      </button>
+      {open && canOpen ? (
+        <pre className="mx-1 mb-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-panel px-2 py-1.5 font-mono text-[11px] leading-5 text-muted [overflow-wrap:anywhere]">
+          {call.detail}
+        </pre>
+      ) : null}
+    </div>
+  );
 }
 
 function composeAnswers(questions: AskQuestion[], picked: Record<string, string[]>, other: Record<string, string>) {

@@ -223,12 +223,13 @@ async function openSession(sdk, id, resume) {
 
 async function consume(session, requestId) {
   let missing = false;
+  const state = { hidden: new Set() };
   for await (const message of session.stream()) {
     if (isMissingConversation(message)) {
       missing = true;
       continue;
     }
-    for (const event of normalizeSdkMessage(message)) {
+    for (const event of normalizeSdkMessage(message, state)) {
       if (event.kind !== "delta" && !(event.kind === "done" && event.ok)) store.append(session.sessionId, event);
       emit({ id: requestId, event });
       if (event.kind === "assistant" && event.text) {
