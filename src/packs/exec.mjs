@@ -3,6 +3,7 @@
  * → Promise<{ code, stdout, stderr, spawnError? }>，命令不存在时 code=-1 且带 spawnError。
  */
 import { spawn } from "node:child_process";
+import { createOutputDecoder } from "../output-decoder.mjs";
 
 export function runCommand(command, args, { cwd, env = process.env, timeoutMs = 10 * 60_000 } = {}) {
   return new Promise((resolve) => {
@@ -34,9 +35,15 @@ export function runCommand(command, args, { cwd, env = process.env, timeoutMs = 
         }, timeoutMs)
       : null;
     timer?.unref?.();
-    child.stdout.on("data", (c) => (stdout += c));
-    child.stderr.on("data", (c) => (stderr += c));
+    const outDecoder = createOutputDecoder();
+    const errDecoder = createOutputDecoder();
+    child.stdout.on("data", (c) => (stdout += outDecoder.write(c)));
+    child.stderr.on("data", (c) => (stderr += errDecoder.write(c)));
     child.on("error", (error) => done({ code: -1, spawnError: error?.code ?? String(error) }));
-    child.on("close", (code) => done({ code: code ?? -1 }));
+    child.on("close", (code) => {
+      stdout += outDecoder.end();
+      stderr += errDecoder.end();
+      done({ code: code ?? -1 });
+    });
   });
 }

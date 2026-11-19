@@ -5,8 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { UpdateSection } from "@/components/update-section";
-import { getCodebuddy, getProfile, getSettings, saveCodebuddy, saveProfile, saveSettings, testHub, type CodebuddySettings } from "@/lib/api";
+import { getCodebuddy, getProfile, getSettings, saveCodebuddy, saveProfile, saveSettings, testHub, type ChatPermission, type CodebuddySettings } from "@/lib/api";
 import { hubLabel } from "@/lib/utils";
+
+const PERMISSION_HINTS: Record<ChatPermission, string> = {
+  readonly: "只能用看本机的白名单工具，其他调用直接被拒，改动要写成 Target 由你确认执行。",
+  confirm: "白名单外的调用会在对话里弹授权卡，你可以允许一次、本会话都允许或拒绝。其他成员发起的请求不弹卡，直接拒绝。",
+  full: "所有工具直接可用，不再询问。会话可以删改这台电脑上的文件，只在你信任当前用法时选。",
+};
 
 function apiKeyHint(source: NonNullable<CodebuddySettings["apiKeySource"]>) {
   switch (source) {
@@ -29,6 +35,7 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
   const [autostart, setAutostart] = useState(false);
   const [model, setModel] = useState("");
   const [environment, setEnvironment] = useState<CodebuddySettings["environment"]>("internal");
+  const [chatPermission, setChatPermission] = useState<ChatPermission>("confirm");
   const [apiKey, setApiKey] = useState("");
   const [hasApiKey, setHasApiKey] = useState(false);
   const [apiKeySource, setApiKeySource] = useState<NonNullable<CodebuddySettings["apiKeySource"]>>("");
@@ -60,6 +67,7 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
         if (cancelled) return;
         setModel(settings.model);
         setEnvironment(settings.environment);
+        setChatPermission(settings.chatPermission ?? "confirm");
         setHasApiKey(settings.hasApiKey);
         setApiKeySource(settings.apiKeySource ?? (settings.hasApiKey ? "panel" : ""));
       })
@@ -137,7 +145,7 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
     setModelTone("info");
     setModelStatus(clearApiKey ? "正在清除本机密钥…" : "正在保存 CodeBuddy 配置…");
     try {
-      const saved = await saveCodebuddy(base, { model, environment, ...(clearApiKey ? { clearApiKey: true } : apiKey ? { apiKey } : {}) });
+      const saved = await saveCodebuddy(base, { model, environment, chatPermission, ...(clearApiKey ? { clearApiKey: true } : apiKey ? { apiKey } : {}) });
       setApiKey("");
       setHasApiKey(saved.hasApiKey);
       setApiKeySource(saved.apiKeySource ?? (saved.hasApiKey ? "panel" : ""));
@@ -148,7 +156,7 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
           : saved.apiKeySource === "env"
             ? "已清除本机密钥，之后的对话改用环境变量 CODEBUDDY_API_KEY。"
             : "已清除本机密钥。本机也没有 Dec 下发或环境变量里的密钥，会话会要求先登录 CodeBuddy。"
-        : "已保存。之后新建或继续的对话会使用这个模型、密钥和类型。");
+        : "已保存。会话进程已重启，之后的对话使用新的模型、密钥、类型和会话权限。");
     } catch (caught) {
       setModelTone("err");
       setModelStatus(caught instanceof Error ? caught.message : "保存失败");
@@ -206,6 +214,13 @@ export function SettingsPage({ base, onRestart }: { base: string; onRestart: () 
         </Field>
         <Field label="API Key" hint={apiKeyHint(apiKeySource)}>
           <Input value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" placeholder={hasApiKey ? "留空则不修改" : "粘贴 API Key"} spellCheck={false} />
+        </Field>
+        <Field label="会话权限" hint={PERMISSION_HINTS[chatPermission]}>
+          <Select value={chatPermission} onChange={(event) => setChatPermission(event.target.value as ChatPermission)}>
+            <option value="readonly">只读</option>
+            <option value="confirm">逐次确认</option>
+            <option value="full">完全放行</option>
+          </Select>
         </Field>
         <div className="flex flex-wrap gap-2">
           <Button variant="accent" disabled={busy} onClick={() => void saveModel()}>保存模型配置</Button>

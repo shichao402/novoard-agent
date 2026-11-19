@@ -74,7 +74,13 @@ test("CodeBuddy 配置可保存模型、类型和密钥，读回时不带密钥�
   const env = codebuddyProcessEnv(kept, { CODEBUDDY_API_KEY: "old" });
   assert.equal(env.CODEBUDDY_API_KEY, "sk-secretvalue1234");
   assert.equal(env.NOVOARD_CODEBUDDY_MODEL, "other");
-  assert.deepEqual(codebuddySessionFields(env), { environment: "internal", model: "other" });
+  assert.deepEqual(codebuddySessionFields(env), { environment: "internal", permission: "confirm", model: "other" });
+  assert.equal(pub.chatPermission, "confirm", "没设过时默认逐次确认");
+  const full = saveCodebuddyConfig(file, { chatPermission: "full" });
+  assert.equal(full.chatPermission, "full");
+  assert.equal(full.model, "other", "只改权限时其他字段保留");
+  assert.equal(codebuddySessionFields(codebuddyProcessEnv(full, {})).permission, "full");
+  assert.equal(saveCodebuddyConfig(file, { chatPermission: "bogus" }).chatPermission, "confirm");
 });
 
 test("CodeBuddy 密钥按 面板 > 环境变量 > Dec 下发文件 取用，类型跟着密钥所在层走", () => {

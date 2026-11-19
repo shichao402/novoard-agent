@@ -718,6 +718,19 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
         }).catch((error) => json(res, 503, { ok: false, message: error.message }));
         return;
       }
+      if (req.method === "POST" && action === "approve") {
+        if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+        if (!chat?.approve) return json(res, 503, { ok: false, message: "会话能力未装配" });
+        readJsonBody(req).then((body) => {
+          if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+          return chat.approve(sessionId, { approvalId: body.data?.approvalId, decision: body.data?.decision });
+        }).then((result) => {
+          if (!result) return;
+          const status = result.ok ? 200 : result.gone ? 409 : 400;
+          json(res, status, result.ok ? result : { ok: false, message: result.message || "这次授权已经结束" });
+        }).catch((error) => json(res, 503, { ok: false, message: error.message }));
+        return;
+      }
       if (req.method === "POST" && action === "messages") {
         if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
         readJsonBody(req, 256 * 1024).then(async (body) => {

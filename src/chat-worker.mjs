@@ -18,6 +18,7 @@ import { createSessionStore } from "./session-store.mjs";
 import { explainAgentError, isMissingConversation, normalizeSdkMessage } from "./chat-events.mjs";
 import { dispatchNovoardTool } from "./novoard-tools.mjs";
 import { createAskGate, formatAnswers, normalizeQuestions } from "./ask-user.mjs";
+import { cliPermissionMode, createApprovalGate, decideToolUse, describeToolCall, permissionPrompt } from "./chat-approval.mjs";
 import { codebuddySessionFields } from "./codebuddy-config.mjs";
 import { NOVOARD_SKILL, NOVOARD_SKILL_NAME, NOVOARD_SKILL_LEGACY_NAMES } from "./novoard-skill.mjs";
 import { BUILTIN_ALLOWED_TOOLS, BUILTIN_DISALLOWED_TOOLS, NOVOARD_MCP_TOOLS } from "./chat-permissions.mjs";
@@ -41,7 +42,9 @@ const live = new Map();
 const queues = new Map();
 const holders = new Map();
 const inflight = new Map();
+const peerTurns = new Set();
 const askGate = createAskGate();
+const approvalGate = createApprovalGate();
 
 function holderFor(id) {
   const existing = holders.get(id);
@@ -70,11 +73,11 @@ function sessionOptions(sdk, holder) {
   return {
     cwd: agentHome,
     settingSources: ["project"],
-    permissionMode: "dontAsk",
+    permissionMode: cliPermissionMode(auth.permission),
     environment: auth.environment,
     ...(auth.model ? { model: auth.model } : {}),
     canUseTool: async (toolName, input, options) => {
-      if (toolName !== "AskUserQuestion") return { behavior: "allow" };
+      if (toolName !== "AskUserQuestion") return approveTool(holder.id, toolName, input, options, auth.permission);
       const sessionId = holder.id;
       const questions = normalizeQuestions(input);
       if (!questions.length) return { behavior: "deny", message: "问题格式不正确，没有可回答的题目。" };
@@ -110,14 +113,42 @@ function sessionOptions(sdk, holder) {
     systemPrompt: {
       append: [
         `你是这台电脑上的 ${edition.productName}。配置、能力包、定时和执行遵循项目 skill ${NOVOARD_SKILL_NAME}。执行 Target 必须走 novoard_run_target，也就是本机 A2A。`,
-        "会话不弹授权框，白名单外的工具调用会直接被拒。可直接用的：novoard 全部工具；Read、Glob、Grep；只读命令 svn info/status/ls/list/log、git status/log/remote/rev-parse/branch；PowerShell 的 Get-ChildItem/Test-Path/Get-Item/Get-Content；写文件只能写 pool.toml。看目录优先用 PowerShell 的 Get-ChildItem <目录> -Name 或 Glob，不要用 ls、dir、cat。一条命令只做一件事，不要用 &&、;、管道拼接。",
-        "删除、改文件、svn update/revert 这类改动写成 Target 步骤，用户确认后经 novoard_run_target 执行。",
-        "被拒后不要换工具绕过、不要排后续计划。用一两句中文说明想做什么、被拒的是哪个工具，再用 AskUserQuestion 给出可选做法（写成 Target 由他确认执行 / 他自己手动做 / 换个方案），等他决定。不要让用户去改白名单或权限设置，他在界面上改不了。",
+        permissionPrompt(auth.permission),
       ].join("\n"),
     },
     env: sessionEnv(),
     stderr: (chunk) => process.stderr.write(String(chunk)),
   };
+}
+
+async function approveTool(sessionId, toolName, input, options, permission) {
+  const allow = { behavior: "allow", updatedInput: input && typeof input === "object" ? input : {} };
+  const decision = decideToolUse({
+    permission,
+    peer: peerTurns.has(sessionId),
+    granted: approvalGate.isGranted(sessionId, toolName),
+  });
+  if (decision === "allow") return allow;
+  if (decision === "deny-readonly") return { behavior: "deny", message: `会话权限是只读，${toolName} 不在白名单里。` };
+  if (decision === "deny-peer") {
+    return { behavior: "deny", message: `这一轮是其他成员发起的，没有本机用户确认，${toolName} 不能直接用。需要时写成 Target 经 novoard_run_target 执行。` };
+  }
+  const approvalId = String(options?.toolUseID || `approve-${Date.now()}`);
+  const requestId = inflight.get(sessionId);
+  const call = describeToolCall(toolName, input);
+  publish(sessionId, requestId, { kind: "approval", approvalId, ...call });
+  let answer;
+  try {
+    answer = await approvalGate.wait(approvalId, sessionId, toolName, options?.signal);
+  } catch {
+    publish(sessionId, requestId, { kind: "approval_result", approvalId, decision: "cancel" });
+    return { behavior: "deny", message: "授权已取消" };
+  }
+  publish(sessionId, requestId, { kind: "approval_result", approvalId, decision: answer });
+  if (answer === "deny") {
+    return { behavior: "deny", message: `用户拒绝了这次 ${toolName} 调用。不要换工具绕过，问他想怎么做。` };
+  }
+  return allow;
 }
 
 function sessionEnv() {
@@ -275,6 +306,7 @@ async function handle(request) {
   }
   if (request.op === "delete") {
     askGate.cancelSession(request.sessionId);
+    approvalGate.forgetSession(request.sessionId);
     holders.delete(request.sessionId);
     const session = live.get(request.sessionId);
     live.delete(request.sessionId);
@@ -285,8 +317,13 @@ async function handle(request) {
   }
   if (request.op === "interrupt") {
     askGate.cancelSession(request.sessionId);
+    approvalGate.cancelSession(request.sessionId);
     await live.get(request.sessionId)?.interrupt();
     emit({ id, result: { ok: true } });
+    return;
+  }
+  if (request.op === "approve") {
+    emit({ id, result: approvalGate.decide(String(request.approvalId ?? ""), request.sessionId, request.decision) });
     return;
   }
   if (request.op === "answer") {
@@ -361,6 +398,8 @@ async function handle(request) {
         updatedAt: new Date().toISOString(),
       });
       inflight.set(request.sessionId, id);
+      if (request.peer === true) peerTurns.add(request.sessionId);
+      else peerTurns.delete(request.sessionId);
       try {
         await session.send(text);
         let outcome = await consume(session, id);
@@ -374,6 +413,7 @@ async function handle(request) {
         emit({ id, result: { ok: true, session: store.get(request.sessionId) } });
       } finally {
         inflight.delete(request.sessionId);
+        peerTurns.delete(request.sessionId);
       }
     });
     return;

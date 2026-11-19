@@ -61,8 +61,8 @@ export function locateNode(env = process.env, options = {}) {
  * 面板保存会主动重启会话进程；Dec 轮换 key、环境变量变化没有通知，靠新建会话前比对指纹发现。
  */
 export function codebuddyFingerprint(configured) {
-  const { apiKeySource = "", apiKey = "", environment = "", model = "" } = configured ?? {};
-  return createHash("sha256").update(JSON.stringify([apiKeySource, apiKey, environment, model])).digest("hex");
+  const { apiKeySource = "", apiKey = "", environment = "", model = "", chatPermission = "" } = configured ?? {};
+  return createHash("sha256").update(JSON.stringify([apiKeySource, apiKey, environment, model, chatPermission])).digest("hex");
 }
 
 /**
@@ -82,7 +82,7 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
   const pending = new Map();
 
   function currentConfig() {
-    const panel = codebuddyFile ? readCodebuddyConfig(codebuddyFile) : { model: "", apiKey: "", environment: "internal" };
+    const panel = readCodebuddyConfig(codebuddyFile);
     return resolveCodebuddyConfig(panel, { env, ...(decEnvFile ? { decFile: decEnvFile } : {}) });
   }
 
@@ -137,7 +137,7 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
       if (!origin) throw new Error("本机 Agent 还没准备好。");
       const script = plainWindowsPath(worker);
       const configured = currentConfig();
-      log.info?.(`[chat] 启动 node=${node} worker=${script} type=${configured.environment} model=${configured.model || "默认"} key=${configured.apiKeySource || "无"}`);
+      log.info?.(`[chat] 启动 node=${node} worker=${script} type=${configured.environment} model=${configured.model || "默认"} key=${configured.apiKeySource || "无"} permission=${configured.chatPermission}`);
       const proc = spawn(node, [script], {
         stdio: ["pipe", "pipe", "pipe"],
         env: codebuddyProcessEnv(configured, {
@@ -222,8 +222,13 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
       answers: payload.answers,
       skip: payload.skip === true,
     }),
+    approve: (sessionId, payload = {}) => request("approve", {
+      sessionId,
+      approvalId: payload.approvalId,
+      decision: payload.decision,
+    }),
     doctor: () => request("doctor"),
-    send: (sessionId, text, onEvent) => request("send", { sessionId, text }, onEvent),
+    send: (sessionId, text, onEvent, options = {}) => request("send", { sessionId, text, ...(options.peer ? { peer: true } : {}) }, onEvent),
     reload() {
       restart();
     },

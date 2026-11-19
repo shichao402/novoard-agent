@@ -418,10 +418,13 @@ test("会话运行时打包清单包含 worker 依赖的全部本地模块", asy
 test("本机会话被拒工具时停下来问用户", async () => {
   const { readFileSync } = await import("node:fs");
   const { NOVOARD_SKILL } = await import("../src/novoard-skill.mjs");
+  const { permissionPrompt } = await import("../src/chat-approval.mjs");
   const worker = readFileSync(new URL("../src/chat-worker.mjs", import.meta.url), "utf8");
   assert.match(NOVOARD_SKILL, /## 工具权限/);
   assert.match(NOVOARD_SKILL, /工具被拒时/);
   assert.match(NOVOARD_SKILL, /不要换个工具或换个写法绕过去/);
-  assert.match(worker, /被拒后不要换工具绕过、不要排后续计划/);
-  assert.match(worker, /不要让用户去改白名单或权限设置/);
+  assert.match(NOVOARD_SKILL, /会话权限/);
+  assert.match(worker, /permissionPrompt\(auth\.permission\)/);
+  assert.match(permissionPrompt("readonly"), /被拒后不要换工具绕过、不要排后续计划/);
+  assert.match(permissionPrompt("confirm"), /用户拒绝后不要换工具绕过、不要排后续计划/);
 });

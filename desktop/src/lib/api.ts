@@ -294,6 +294,12 @@ export type ChatEvent = {
   questions?: AskQuestion[];
   answers?: Record<string, string>;
   skipped?: boolean;
+  approvalId?: string;
+  tool?: string;
+  summary?: string;
+  detail?: string;
+  reason?: string;
+  decision?: "once" | "session" | "deny" | "cancel";
 };
 
 export type AgentProfile = {
@@ -385,6 +391,17 @@ export function answerQuestion(
   });
 }
 
+export type ApprovalDecision = "once" | "session" | "deny";
+
+export function approveTool(base: string, id: string, approvalId: string, decision: ApprovalDecision) {
+  return request<{ ok: boolean }>(base, `/api/sessions/${encodeURIComponent(id)}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ approvalId, decision }),
+  });
+}
+
+export type ChatPermission = "readonly" | "confirm" | "full";
+
 export type LogPage = {
   page: number;
   pageSize: number;
@@ -401,6 +418,7 @@ export type CodebuddySettings = {
   hasApiKey: boolean;
   apiKeySource?: "" | "panel" | "env" | "dec";
   effectiveEnvironment?: "internal" | "external" | "ioa" | "cloudhosted";
+  chatPermission?: ChatPermission;
 };
 
 export function getCodebuddy(base: string) {
@@ -409,7 +427,7 @@ export function getCodebuddy(base: string) {
 
 export function saveCodebuddy(
   base: string,
-  input: { model: string; environment: CodebuddySettings["environment"]; apiKey?: string; clearApiKey?: boolean },
+  input: { model: string; environment: CodebuddySettings["environment"]; chatPermission?: ChatPermission; apiKey?: string; clearApiKey?: boolean },
 ) {
   return request<CodebuddySettings>(base, "/api/codebuddy", { method: "PUT", body: JSON.stringify(input) });
 }

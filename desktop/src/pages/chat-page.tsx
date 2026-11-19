@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   agentDoctor,
+  approveTool,
   createSession,
   deleteSession,
   answerQuestion,
@@ -12,6 +13,7 @@ import {
   sendMessage,
   sessionHistory,
   subscribeSessions,
+  type ApprovalDecision,
   type AskQuestion,
   type ChatEvent,
   type ChatSession,
@@ -20,6 +22,18 @@ import { applyToolEvent, groupTitle, settleCalls, type ToolCall } from "@/lib/ch
 import { prefixHeights, resolveWindow } from "@/lib/sliding-window.mjs";
 
 type TextBubble = { id: string; role: "user" | "assistant" | "error" | "status"; text: string };
+/** 白名单外的工具等用户放行。decision 为空表示还在等。 */
+type ApprovalBubble = {
+  id: string;
+  role: "approval";
+  approvalId: string;
+  tool: string;
+  summary: string;
+  detail: string;
+  reason: string;
+  decision?: ApprovalDecision | "cancel";
+  open: boolean;
+};
 type QuestionBubble = {
   id: string;
   role: "question";
@@ -32,9 +46,10 @@ type QuestionBubble = {
 };
 /** 连续的工具调用合成一组；展开状态放在数据里，改变时外层滚动容器才会重新量高度。 */
 type ToolGroupBubble = { id: string; role: "tools"; calls: ToolCall[]; open: boolean; openCalls: string[] };
-type Bubble = TextBubble | QuestionBubble | ToolGroupBubble;
+type Bubble = TextBubble | QuestionBubble | ToolGroupBubble | ApprovalBubble;
 type Slice = { start: number; end: number };
 type ToggleTool = (bubbleId: string, callKey?: string) => void;
+type Approve = (approvalId: string, decision: ApprovalDecision) => Promise<void>;
 
 const PIN_SLOP_PX = 64;
 
@@ -123,9 +138,10 @@ export function ChatPage({ base }: { base: string }) {
   useEffect(() => {
     if (streaming) return;
     setMessages((current) => {
-      if (!current.some((item) => (item.role === "question" && item.pending && item.live) || (item.role === "tools" && item.calls.some((call) => call.status === "running")))) return current;
+      if (!current.some((item) => (item.role === "question" && item.pending && item.live) || (item.role === "approval" && !item.decision) || (item.role === "tools" && item.calls.some((call) => call.status === "running")))) return current;
       return current.map((item) => {
         if (item.role === "question" && item.pending && item.live) return { ...item, pending: false, live: false, skipped: true };
+        if (item.role === "approval" && !item.decision) return { ...item, decision: "cancel" };
         if (item.role === "tools") {
           const calls = settleCalls(item.calls);
           return calls === item.calls ? item : { ...item, calls };
@@ -137,6 +153,7 @@ export function ChatPage({ base }: { base: string }) {
 
   const toggleTool: ToggleTool = (bubbleId, callKey) => {
     setMessages((current) => current.map((item) => {
+      if (item.id === bubbleId && item.role === "approval") return { ...item, open: !item.open };
       if (item.id !== bubbleId || item.role !== "tools") return item;
       if (callKey === undefined) return { ...item, open: !item.open };
       const openCalls = item.openCalls.includes(callKey)
@@ -153,6 +170,14 @@ export function ChatPage({ base }: { base: string }) {
       item.role === "question" && item.questionId === questionId
         ? { ...item, pending: false, live: false, skipped: Boolean(body.skip), answers: body.answers }
         : item
+    )));
+  }
+
+  async function submitApproval(approvalId: string, decision: ApprovalDecision) {
+    if (!active) throw new Error("没有正在进行的会话");
+    await approveTool(base, active, approvalId, decision);
+    setMessages((current) => current.map((item) => (
+      item.role === "approval" && item.approvalId === approvalId ? { ...item, decision } : item
     )));
   }
 
@@ -259,7 +284,7 @@ export function ChatPage({ base }: { base: string }) {
             <Trash2 size={14} />删除
           </Button>
         </div>
-        <MessageScroller messages={messages} resetKey={active} onAnswer={submitAnswer} onToggle={toggleTool} />
+<MessageScroller messages={messages} resetKey={active} onAnswer={submitAnswer} onApprove={submitApproval} onToggle={toggleTool} />
         {error ? <p className="px-4 pb-2 text-xs leading-5 text-bad" role="alert">{error}</p> : null}
         <form
           className="flex items-end gap-2 border-t border-line p-3"
@@ -309,11 +334,13 @@ function MessageScroller({
   messages,
   resetKey,
   onAnswer,
+  onApprove,
   onToggle,
 }: {
   messages: Bubble[];
   resetKey: string | null;
   onAnswer: (questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) => Promise<void>;
+  onApprove: Approve;
   onToggle: ToggleTool;
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -490,7 +517,7 @@ function MessageScroller({
               className="absolute left-0 w-full min-w-0"
               style={{ top: prefix[view.start + offset] }}
             >
-              <MessageView item={item} onAnswer={onAnswer} onToggle={onToggle} />
+<MessageView item={item} onAnswer={onAnswer} onApprove={onApprove} onToggle={onToggle} />
             </div>
           ))}
         </div>
@@ -516,6 +543,24 @@ function toolGroup(calls: ToolCall[]): ToolGroupBubble {
 
 /** 把一条事件并进气泡列表：工具调用和结果进最近的工具组，其余按原样追加。 */
 function appendEvent(current: Bubble[], event: ChatEvent): Bubble[] {
+  if (event.kind === "approval" && event.approvalId) {
+    if (current.some((item) => item.role === "approval" && item.approvalId === event.approvalId)) return current;
+    return [...current, {
+      id: `approval-${event.approvalId}`,
+      role: "approval",
+      approvalId: event.approvalId,
+      tool: event.tool || "工具",
+      summary: event.summary || "",
+      detail: event.detail || "",
+      reason: event.reason || "",
+      open: false,
+    }];
+  }
+  if (event.kind === "approval_result" && event.approvalId) {
+    return current.map((item) => (
+      item.role === "approval" && item.approvalId === event.approvalId ? { ...item, decision: event.decision ?? "cancel" } : item
+    ));
+  }
   if (event.kind === "tool" && event.name === "AskUserQuestion") return current;
   if (event.kind === "tool" || event.kind === "tool_result") {
     // 结果可能落在中间夹了状态行的更早一组里，按 id 往回找
@@ -587,13 +632,16 @@ function questionBubble(event: ChatEvent, live: boolean): QuestionBubble {
 function MessageView({
   item,
   onAnswer,
+  onApprove,
   onToggle,
 }: {
   item: Bubble;
   onAnswer: (questionId: string, body: { skip?: boolean; answers?: Record<string, string> }) => Promise<void>;
+  onApprove: Approve;
   onToggle: ToggleTool;
 }) {
   if (item.role === "question") return <QuestionCard item={item} onAnswer={onAnswer} />;
+  if (item.role === "approval") return <ApprovalCard item={item} onApprove={onApprove} onToggle={onToggle} />;
   if (item.role === "tools") return <ToolGroupView item={item} onToggle={onToggle} />;
   const wrap = "whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
   if (item.role === "user") {
@@ -665,6 +713,73 @@ function ToolCallRow({ call, open, indent, onToggle }: { call: ToolCall; open: b
           {call.detail}
         </pre>
       ) : null}
+    </div>
+  );
+}
+
+const APPROVAL_RESULT: Record<ApprovalDecision | "cancel", string> = {
+  once: "已允许这一次",
+  session: "本会话内已允许",
+  deny: "已拒绝",
+  cancel: "已取消",
+};
+
+/** 白名单外的工具调用，等用户放行。决定之后收成一行结果。 */
+function ApprovalCard({ item, onApprove, onToggle }: { item: ApprovalBubble; onApprove: Approve; onToggle: ToggleTool }) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [note, setNote] = useState("");
+  const decided = item.decision ? APPROVAL_RESULT[item.decision] : note;
+
+  async function decide(decision: ApprovalDecision) {
+    if (submitting) return;
+    setError("");
+    setSubmitting(true);
+    try {
+      await onApprove(item.approvalId, decision);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "提交失败";
+      if (message.includes("已经结束")) setNote("这次授权已经结束");
+      else setError(message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className={`mx-4 my-2 min-w-0 rounded-xl border bg-surface px-3 py-2 ${decided ? "border-line" : "border-accent/50"}`}>
+      <div className="flex min-w-0 items-center gap-1.5 text-xs">
+        <ShieldAlert size={13} className={`shrink-0 ${decided ? "text-faint" : "text-accent"}`} />
+        <span className="shrink-0 text-ink">{decided ? item.tool : `要使用 ${item.tool}`}</span>
+        {decided ? <span className={`min-w-0 truncate ${item.decision === "deny" ? "text-bad" : "text-faint"}`}>{decided}</span> : null}
+      </div>
+      {item.summary ? (
+        <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-muted [overflow-wrap:anywhere]">{item.summary}</div>
+      ) : null}
+      {item.reason ? <div className="mt-1 text-xs leading-5 text-faint">理由：{item.reason}</div> : null}
+      {item.detail ? (
+        <button
+          type="button"
+          className="mt-1 flex items-center gap-1 rounded px-0.5 text-[11px] text-faint hover:text-muted"
+          aria-expanded={item.open}
+          onClick={() => onToggle(item.id)}
+        >
+          {item.open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}完整参数
+        </button>
+      ) : null}
+      {item.open && item.detail ? (
+        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-panel px-2 py-1.5 font-mono text-[11px] leading-5 text-muted [overflow-wrap:anywhere]">
+          {item.detail}
+        </pre>
+      ) : null}
+      {error ? <p className="mt-2 text-xs text-bad" role="alert">{error}</p> : null}
+      {decided ? null : (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button type="button" variant="accent" size="sm" disabled={submitting} onClick={() => void decide("once")}>允许一次</Button>
+          <Button type="button" variant="secondary" size="sm" disabled={submitting} onClick={() => void decide("session")}>本会话都允许 {item.tool}</Button>
+          <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={() => void decide("deny")}>拒绝</Button>
+        </div>
+      )}
     </div>
   );
 }

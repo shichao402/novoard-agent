@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { DEFAULT_CHAT_PERMISSION, normalizeChatPermission } from "./chat-approval.mjs";
 
 export const CODEBUDDY_ENVIRONMENTS = ["internal", "external", "ioa", "cloudhosted"];
 
@@ -10,7 +11,7 @@ export const DEC_CODEBUDDY_ENV_NAME = "novoard-agent.codebuddy.env";
 /** 密钥来源：面板本地配置 > 进程环境变量 > Dec 下发文件。 */
 export const API_KEY_SOURCES = ["panel", "env", "dec"];
 
-const DEFAULTS = { model: "", apiKey: "", environment: "internal" };
+const DEFAULTS = { model: "", apiKey: "", environment: "internal", chatPermission: DEFAULT_CHAT_PERMISSION };
 
 export function readCodebuddyConfig(file) {
   if (!file || !existsSync(file)) return { ...DEFAULTS };
@@ -96,6 +97,7 @@ export function publicCodebuddyConfig(config, resolved = null) {
     hasApiKey: Boolean(panel.apiKey),
     apiKeySource: effective.apiKeySource || "",
     effectiveEnvironment: normalize(effective).environment,
+    chatPermission: panel.chatPermission,
   };
 }
 
@@ -109,10 +111,11 @@ export function saveCodebuddyConfig(file, input, previous = readCodebuddyConfig(
     model: input?.model ?? previous.model,
     environment: input?.environment ?? previous.environment,
     apiKey: input?.clearApiKey === true ? "" : typed || previous.apiKey,
+    chatPermission: input?.chatPermission ?? previous.chatPermission,
   });
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ model: next.model, environment: next.environment, apiKey: next.apiKey }, null, 2));
+  writeFileSync(tmp, JSON.stringify({ model: next.model, environment: next.environment, apiKey: next.apiKey, chatPermission: next.chatPermission }, null, 2));
   try { chmodSync(tmp, 0o600); } catch { /* Windows 上权限位有限 */ }
   renameSync(tmp, file);
   try { chmodSync(file, 0o600); } catch { /* 同上 */ }
@@ -128,6 +131,7 @@ export function codebuddyProcessEnv(config, base = {}) {
   else delete env.CODEBUDDY_API_KEY;
   if (normalized.model) env.NOVOARD_CODEBUDDY_MODEL = normalized.model;
   else delete env.NOVOARD_CODEBUDDY_MODEL;
+  env.NOVOARD_CHAT_PERMISSION = normalized.chatPermission;
   return env;
 }
 
@@ -136,7 +140,7 @@ export function codebuddySessionFields(env = process.env) {
     ? env.CODEBUDDY_INTERNET_ENVIRONMENT
     : "internal";
   const model = String(env.NOVOARD_CODEBUDDY_MODEL ?? "").trim();
-  return { environment, ...(model ? { model } : {}) };
+  return { environment, permission: normalizeChatPermission(env.NOVOARD_CHAT_PERMISSION), ...(model ? { model } : {}) };
 }
 
 function normalize(input) {
@@ -145,5 +149,6 @@ function normalize(input) {
     model: String(input?.model ?? "").trim(),
     apiKey: String(input?.apiKey ?? "").trim(),
     environment,
+    chatPermission: normalizeChatPermission(input?.chatPermission),
   };
 }

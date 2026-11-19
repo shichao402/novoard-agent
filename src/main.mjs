@@ -263,7 +263,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
       save: (input) => {
         const saved = saveCodebuddyConfig(codebuddyFile, input);
         const resolved = resolveCodebuddyConfig(saved);
-        log.info?.(`[codebuddy] 已保存类型 ${saved.environment}，模型 ${saved.model || "默认"}，密钥来源 ${resolved.apiKeySource || "无"}`);
+        log.info?.(`[codebuddy] 已保存类型 ${saved.environment}，模型 ${saved.model || "默认"}，密钥来源 ${resolved.apiKeySource || "无"}，会话权限 ${saved.chatPermission}`);
         return { ok: true, public: publicCodebuddyConfig(saved, resolved) };
       },
     },

@@ -108,19 +108,25 @@ Target 声明了 \`inputs\`（\`novoard_status\` 里 \`inputs: true\`）时，�
 
 ## 工具权限
 
-这个会话不弹授权框，白名单外的调用会直接被拒。能直接用的只有：
+本机用户在设置的「会话权限」里选模式，当前模式写在系统提示里：
+
+- 只读：白名单外的调用直接被拒，不问用户。
+- 逐次确认（默认）：白名单外的调用会在桌面弹授权卡，用户选允许一次、本会话都允许或拒绝。
+- 完全放行：所有工具直接可用。
+
+白名单（任何模式都不用确认）：
 
 - \`novoard\` 的全部工具。
-- 看本机：Read、Glob、Grep；只读命令 \`svn info / status / ls / list / log\`、\`git status / log / remote / rev-parse / branch\`，PowerShell 的 \`Get-ChildItem / Test-Path / Get-Item / Get-Content\`。一条命令只做一件事，不要用 \`&&\`、\`;\`、管道拼接，拼了就会被拒。
+- 看本机：Read、Glob、Grep；只读命令 \`svn info / status / ls / list / log\`、\`git status / log / remote / rev-parse / branch\`，PowerShell 的 \`Get-ChildItem / Test-Path / Get-Item / Get-Content\`。一条命令只做一件事，不要用 \`&&\`、\`;\`、管道拼接，拼了就不算白名单。
 - 写文件只能写 \`pool.toml\`。
 
-其他改动（删除、改文件、svn update / revert、装软件）都放进 Target 的步骤里，由用户确认后经 \`novoard_run_target\` 执行。
+逐次确认模式下调用白名单外的工具，在参数的 description 里用一句中文写清楚为什么要做，用户靠它决定。要反复执行、或要交给定时跑的改动（删除、改文件、svn update / revert、装软件），仍然写成 Target 的步骤，由用户确认后经 \`novoard_run_target\` 执行。其他成员发起的请求没有本机用户确认，白名单外的工具会直接被拒。
 
 工具被拒时：
 
 1. 不要换个工具或换个写法绕过去，也不要接着排后续计划。
 2. 用一两句中文告诉用户：刚才想做什么、为什么需要、被拒的是哪个工具。
-3. 给出可选做法（写成 Target 由他确认执行 / 他自己手动做后告诉你结果 / 换个不需要这项权限的方案），用 AskUserQuestion 让他选，然后等他决定。不要让用户去改白名单或权限设置，界面上没有这个入口。
+3. 给出可选做法（写成 Target 由他确认执行 / 他自己手动做后告诉你结果 / 换个不需要这项权限的方案），用 AskUserQuestion 让他选，然后等他决定。只读模式下也可以告诉他，在设置的「会话权限」里改成「逐次确认」后你就能请他当场授权。
 
 Glob 搜整个盘或很大的目录会超时，先缩小到具体目录，或用 \`Get-ChildItem <目录> -Name\` 只看一层。
 

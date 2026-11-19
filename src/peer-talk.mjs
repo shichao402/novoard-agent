@@ -115,7 +115,7 @@ export function createPeerTalk({ agentId, profile, targets, tunnel, chat, stateD
     ].join("\n");
     await currentChat.send(sessionId, prompt, (event) => {
       if (event?.kind === "assistant" && event.text) reply = event.text;
-    });
+    }, { peer: true });
     if (!reply.trim()) throw new Error("模型没有给出回复");
     return reply.trim();
   }

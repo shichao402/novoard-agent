@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { constants as osConstants, setPriority } from "node:os";
 import { parseDuration } from "./duration.mjs";
 import { parseProgressLine, prepareInvocation, readResult, EXIT } from "./packs/invoke.mjs";
+import { createOutputDecoder } from "./output-decoder.mjs";
 
 const VAR_RE = /\{\{(\w+)\}\}/g;
 const DEFAULT_RETRY_INTERVAL_MS = 3_000;
@@ -228,8 +229,10 @@ export function createRunner({
         stdout = tail(stdout, `${line}\n`);
         onOutput("stdout", `${line}\n`);
       };
-      child.stdout?.on("data", (chunk) => {
-        const text = String(chunk);
+      const outDecoder = createOutputDecoder();
+      const errDecoder = createOutputDecoder();
+      const takeStdout = (text) => {
+        if (!text) return;
         if (!parseProgress) {
           stdout = tail(stdout, text);
           onOutput("stdout", text);
@@ -241,18 +244,22 @@ export function createRunner({
           takeLine(lineBuf.slice(0, nl).replace(/\r$/, ""));
           lineBuf = lineBuf.slice(nl + 1);
         }
-      });
-      child.stderr?.on("data", (chunk) => {
-        const text = String(chunk);
+      };
+      const takeStderr = (text) => {
+        if (!text) return;
         stderr = tail(stderr, text);
         onOutput("stderr", text);
-      });
+      };
+      child.stdout?.on("data", (chunk) => takeStdout(outDecoder.write(chunk)));
+      child.stderr?.on("data", (chunk) => takeStderr(errDecoder.write(chunk)));
       child.on("error", (error) => {
         endStep(1);
         if (currentChild === child) currentChild = null;
         finish({ ok: false, stderr: `spawn 失败：${error.message}` });
       });
       child.on("close", (code) => {
+        takeStdout(outDecoder.end());
+        takeStderr(errDecoder.end());
         if (parseProgress && lineBuf) takeLine(lineBuf);
         lineBuf = "";
         endStep(code ?? 1);
