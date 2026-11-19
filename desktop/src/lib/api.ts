@@ -321,7 +321,7 @@ export function getActivity(base: string) {
 }
 
 export function agentDoctor(base: string) {
-  return request<{ ok: boolean; cli?: boolean; message?: string }>(base, "/api/agent/doctor");
+  return request<{ ok: boolean; cli?: boolean; message?: string; permission?: ChatPermission }>(base, "/api/agent/doctor");
 }
 
 export function listSessions(base: string) {

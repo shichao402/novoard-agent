@@ -16,10 +16,13 @@ import {
   type ApprovalDecision,
   type AskQuestion,
   type ChatEvent,
+  type ChatPermission,
   type ChatSession,
 } from "@/lib/api";
 import { applyToolEvent, groupTitle, settleCalls, type ToolCall } from "@/lib/chat-tools.mjs";
 import { prefixHeights, resolveWindow } from "@/lib/sliding-window.mjs";
+
+const PERMISSION_LABELS: Record<ChatPermission, string> = { readonly: "只读", confirm: "逐次确认", full: "完全放行" };
 
 type TextBubble = { id: string; role: "user" | "assistant" | "error" | "status"; text: string };
 /** 白名单外的工具等用户放行。decision 为空表示还在等。 */
@@ -94,7 +97,12 @@ export function ChatPage({ base }: { base: string }) {
       })
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "无法读取会话"));
     void agentDoctor(base)
-      .then((result) => { if (!cancelled) setDoctor(result.ok ? (result.cli ? "模型运行时已就绪" : "正在使用 CodeBuddy 运行时") : (result.message || "模型运行时不可用")); })
+      .then((result) => {
+        if (cancelled) return;
+        const status = result.ok ? (result.cli ? "模型运行时已就绪" : "正在使用 CodeBuddy 运行时") : (result.message || "模型运行时不可用");
+        const permission = result.permission ? PERMISSION_LABELS[result.permission] : "";
+        setDoctor(permission ? `${status} · 会话权限：${permission}` : status);
+      })
       .catch((caught: unknown) => { if (!cancelled) setDoctor(caught instanceof Error ? caught.message : "模型运行时不可用"); });
     return () => { cancelled = true; };
   }, [base]);

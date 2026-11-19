@@ -357,6 +357,7 @@ async function handle(request) {
           message,
           model: auth.model ?? "",
           environment: auth.environment,
+          permission: auth.permission,
           hasApiKey: Boolean(process.env.CODEBUDDY_API_KEY),
         },
       });
