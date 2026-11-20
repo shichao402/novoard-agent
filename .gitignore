@@ -27,3 +27,6 @@ agent.json
 
 # 本机运行态日志
 logs/
+
+# agent 内置会话的 skill 由 src/novoard-skill.mjs 在运行目录生成，不提交副本
+.codebuddy/skills/
