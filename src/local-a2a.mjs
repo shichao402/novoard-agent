@@ -16,7 +16,8 @@ import { serveConsole } from "./console-ui.mjs";
 import { createUiAccess, isLoopbackHost, uiLoginPage } from "./ui-access.mjs";
 import { readJsonlTail } from "./jsonl.mjs";
 import { pageLogFile } from "./log-page.mjs";
-import { listShortcutRuns, shortcutRunFile } from "./shortcut-log.mjs";
+import { listShortcutRuns, readShortcutRunLines, shortcutLogPath, shortcutRunFile } from "./shortcut-log.mjs";
+import { listRuns, readRun } from "./run-trace.mjs";
 
 const TERMINAL = new Set(["completed", "failed", "canceled", "rejected"]);
 
@@ -107,7 +108,7 @@ export function handleDesktopCors(req, res) {
   return false;
 }
 
-export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, chat, peer, profile, packManager = null, packRegistry = null, gitAuth = null, diagnoseTarget = null, schedule = null, inputMemory = null, inputService = null } = {}) {
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, runTraceDir = null, chat, peer, profile, packManager = null, packRegistry = null, gitAuth = null, diagnoseTarget = null, schedule = null, inputMemory = null, inputService = null } = {}) {
   const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
@@ -184,6 +185,38 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       for (const res of sseListeners.get(taskId) ?? []) try { res.end(); } catch {}
       sseListeners.delete(taskId);
     }
+  }
+
+  /** 运行视图（ADR-0021）：历史来自运行记录，在途状态来自 runtime 快照。 */
+  function liveRuns() {
+    const items = runtime?.snapshot?.() ?? [];
+    return items.map((item) => ({ ...item, title: getTargets()[item.target]?.title ?? item.target }));
+  }
+
+  function runLogPath(target, taskId) {
+    try { return shortcutLogPath(shortcutLogDir ?? "", target, taskId).relative; } catch { return null; }
+  }
+
+  function decorateRun(summary, liveById) {
+    const live = liveById.get(summary.taskId);
+    const state = summary.state === "open" ? (live ? live.state : "interrupted") : summary.state;
+    const end = summary.endedAt ? Date.parse(summary.endedAt) : live ? Date.now() : null;
+    const duration = end && summary.startedAt ? Math.max(0, end - Date.parse(summary.startedAt)) : null;
+    return {
+      ...summary,
+      state,
+      title: getTargets()[summary.target]?.title ?? summary.target,
+      durationMs: duration,
+      log: runLogPath(summary.target, summary.taskId),
+      ...(live ? { live } : {}),
+    };
+  }
+
+  function historyRuns({ target = "", limit = 50 } = {}) {
+    const live = liveRuns();
+    const liveById = new Map(live.map((item) => [item.taskId, item]));
+    const runs = listRuns(runTraceDir, { target, limit }).map((summary) => decorateRun(summary, liveById));
+    return { live: target ? live.filter((item) => item.target === target) : live, runs };
   }
 
   function json(res, status, body) {
@@ -332,15 +365,27 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
     if (req.method === "GET" && url.pathname === "/api/tiles") {
       const sched = schedule?.status?.() ?? null;
       const byId = new Map((sched?.targets ?? []).map((s) => [s.id, s]));
+      const { live, runs: recent } = historyRuns({ limit: 0 });
+      const lastRunOf = new Map();
+      for (const run of recent) if (!lastRunOf.has(run.target)) lastRunOf.set(run.target, run);
+      const liveOf = new Map();
+      for (const item of live) liveOf.set(item.target, [...(liveOf.get(item.target) ?? []), item]);
       const tiles = Object.entries(getTargets())
         .filter(([, t]) => t.expose !== "none")
         .map(([id, t]) => {
-          const last = tasks.lastOf(id);
+          const memory = tasks.lastOf(id);
+          const traced = lastRunOf.get(id) ?? null;
+          // 内存表只有本机触发；没有或比运行记录旧时用运行记录（ADR-0021）
+          const last = memory && (!traced || memory.submittedAt >= traced.startedAt)
+            ? memory
+            : traced ? { state: traced.state, status: { message: "" }, updatedAt: traced.endedAt ?? traced.startedAt, log: traced.log } : null;
           const s = byId.get(id);
           return {
             id, title: t.title ?? id, requiresApproval: t.requiresApproval === true, inputs: hasInputs(t), concurrency: t.concurrency ?? 1, timeout: t.timeout ?? "10m", icon: t.icon ?? "▶",
             last: last ? { state: last.state, message: last.status.message, at: last.updatedAt, log: last.log ?? null } : null,
             problems: diagnoseTarget?.(t) ?? [],
+            lastRun: traced,
+            live: liveOf.get(id) ?? [],
             ...(t.schedule ? { schedule: t.schedule, nextRun: s?.nextRun ?? null, lastScheduled: s?.last ?? null } : {}),
           };
         });
@@ -483,6 +528,49 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(JSON.stringify({ ok: true, ...pageLogFile(logFile, { page, level, query, pageSize }) }));
       return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/runs") {
+      const target = url.searchParams.get("target") ?? "";
+      const limit = Number(url.searchParams.get("limit") ?? 50);
+      if (target && !/^[a-z0-9][a-z0-9-]*$/.test(target)) return json(res, 400, { ok: false, reason: "target 不合法" });
+      return json(res, 200, { ok: true, retentionDays: 30, ...historyRuns({ target, limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, 500) : 50 }) });
+    }
+    const runCancel = url.pathname.match(/^\/api\/runs\/(task-[A-Za-z0-9-]+)\/cancel$/);
+    if (req.method === "POST" && runCancel) {
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      const id = runCancel[1];
+      const live = (runtime?.snapshot?.() ?? []).find((item) => item.taskId === id);
+      if (!live) return json(res, 409, { ok: false, reason: "这次运行已经结束" });
+      if (live.state === "input-required") return json(res, 409, { ok: false, reason: "等待审批的任务请在 Hub 上处理" });
+      const r = runtime.cancel(id);
+      const t = tasks.get(id);
+      if (r.ok && t && !TERMINAL.has(t.state)) {
+        t.state = "canceled";
+        t.status = { state: "canceled", message: "canceled by console" };
+        t.updatedAt = new Date().toISOString();
+        emit(id);
+      }
+      audit?.({ lane: "local", target: live.target, taskId: id, outcome: r.ok ? "canceled" : "failed", detail: { via: "console", action: "cancel", reason: r.reason } });
+      return json(res, r.ok ? 200 : 409, r);
+    }
+    const runDetail = url.pathname.match(/^\/api\/runs\/(task-[A-Za-z0-9-]+)$/);
+    if (req.method === "GET" && runDetail) {
+      const id = runDetail[1];
+      const live = liveRuns();
+      const liveById = new Map(live.map((item) => [item.taskId, item]));
+      const summary = readRun(runTraceDir, id);
+      const run = summary
+        ? decorateRun(summary, liveById)
+        : liveById.has(id)
+          ? (() => {
+            const item = liveById.get(id);
+            return { taskId: id, target: item.target, title: item.title, trigger: item.trigger, startedAt: item.startedAt, endedAt: null, state: item.state, steps: [], failedStep: null, durationMs: Math.max(0, Date.now() - Date.parse(item.startedAt)), log: runLogPath(item.target, id), live: item };
+          })()
+          : null;
+      if (!run) return json(res, 404, { ok: false, reason: "找不到这次运行，可能已超过保留期" });
+      const file = shortcutRunFile(shortcutLogDir, run.target, id);
+      const { lines, truncated } = readShortcutRunLines(file);
+      return json(res, 200, { ok: true, run, lines, truncated });
     }
     const shortcutRuns = url.pathname.match(/^\/api\/shortcuts\/([a-z0-9][a-z0-9-]*)\/runs$/);
     if (req.method === "GET" && shortcutRuns) {

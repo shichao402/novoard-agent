@@ -9,7 +9,7 @@
 import { createRunner } from "./runner.mjs";
 import { parseDuration } from "./duration.mjs";
 import { createShortcutRun } from "./shortcut-log.mjs";
-import { openRunTrace } from "./run-trace.mjs";
+import { openRunTrace, pruneRunTraces } from "./run-trace.mjs";
 import { createPathLocks, normalizePathKey } from "./path-locks.mjs";
 import { formatProblems } from "./packs/diagnose.mjs";
 
@@ -68,7 +68,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
 
     if (targetDef.requiresApproval === true) {
       // M4 F3：挂起而非终态——hub 侧 task 停在 input-required，恢复帧到达后 startExecution
-      running.set(taskId, { state: "input-required", pending: input });
+      running.set(taskId, { state: "input-required", pending: input, submittedAt: now() });
       notifyActivity();
       onTerminal?.("input-required", `target ${skillId} requiresApproval=true，等待审批（hub 审批门）`);
       return { ok: true, reason: "input-required" };
@@ -105,6 +105,10 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
       lock: null,
       deadlineTimer: null,
       runner: null,
+      trigger,
+      total: Array.isArray(steps) ? steps.length : 0,
+      progress: { step: 0, message: "" },
+      blockedBy: [],
     };
     const timeoutMs = parseDuration(targetDef?.timeout, parseDuration(DEFAULT_TIMEOUT, 600_000));
     log.info?.(`[shortcut] 开始 target=${skillId} task=${taskId}${ctx.runLog ? ` log=${ctx.runLog.relative}` : ""} trigger=${trigger}`);
@@ -143,6 +147,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
       const installing = packInstaller
         .ensureFor(steps, {
           onProgress: (message) => {
+            ctx.progress = { step: 0, message };
             ctx.runLog?.info(message);
             try { onProgress?.(0, total, message); } catch {}
           },
@@ -181,6 +186,8 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
     ctx.lock = lock;
     if (!lock.immediate) {
       const waitText = `排队中：等待 ${lock.blockedBy.join("、")} 释放`;
+      ctx.blockedBy = [...lock.blockedBy];
+      ctx.progress = { step: 0, message: waitText };
       running.set(taskId, { state: "working", queued: true, lock, ctx, skillId });
       notifyActivity();
       ctx.runLog?.info(waitText);
@@ -192,6 +199,8 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
           lock.release();
           return;
         }
+        ctx.blockedBy = [];
+        ctx.progress = { step: 0, message: "" };
         ctx.runLog?.info("已拿到路径锁，开始执行");
         begin(ctx, input, timeoutMs);
       });
@@ -216,15 +225,22 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
         baseEnv: scriptEnv,
         packs,
         onOutput: (stream, text) => ctx.runLog?.output(stream, text),
-        onProgress: (i, n) => onProgress?.(i, n, `第 ${i}/${n} 步`),
+        onProgress: (i, n) => {
+          ctx.progress = { step: i, message: "" };
+          onProgress?.(i, n, `第 ${i}/${n} 步`);
+        },
         onDetail: (i, message) => {
+          ctx.progress = { step: i, message };
           ctx.runLog?.info(`进度 第 ${i} 步：${message}`);
           onProgress?.(i, steps.length, `第 ${i}/${steps.length} 步：${message}`);
         },
         onStepStart: ({ index, command }) => {
+          ctx.runLog?.setStep?.(index);
+          ctx.progress = { step: index, message: "" };
           emitTrace(ctx, { type: "step/start", index, command, target: skillId });
         },
         onStepEnd: ({ index, exit }) => {
+          ctx.runLog?.setStep?.(0);
           emitTrace(ctx, { type: "step/end", index, exit, target: skillId });
         },
       });
@@ -301,7 +317,13 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
     return keys;
   }
 
+  let lastPrune = 0;
   function openTrace(taskId) {
+    // 运行记录保留 30 天（ADR-0021），最多每小时清一次
+    if (runTraceDir && now() - lastPrune > 3_600_000) {
+      lastPrune = now();
+      try { pruneRunTraces(runTraceDir, Date.now()); } catch { /* 清理失败不影响执行 */ }
+    }
     try {
       return openRunTrace({ root: runTraceDir, taskId });
     } catch (error) {
@@ -395,10 +417,50 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
     return { ok: executions.size === 0, remaining: executions.size };
   }
 
+  /**
+   * 在途快照（ADR-0021）：运行中、排队、等待审批。界面的实时状态只从这里来，不落盘。
+   * state：working | queued | input-required。
+   */
+  function snapshot() {
+    const items = [];
+    for (const [taskId, entry] of running) {
+      if (entry.state === "input-required") {
+        const input = entry.pending ?? {};
+        items.push({
+          taskId,
+          target: input.skillId ?? "",
+          state: "input-required",
+          trigger: input.trigger ?? "manual",
+          startedAt: new Date(entry.submittedAt ?? now()).toISOString(),
+          step: 0,
+          total: Array.isArray(input.steps) ? input.steps.length : 0,
+          message: "",
+          blockedBy: [],
+        });
+        continue;
+      }
+      const ctx = entry.ctx;
+      if (!ctx) continue;
+      items.push({
+        taskId,
+        target: ctx.skillId,
+        state: entry.queued ? "queued" : "working",
+        trigger: ctx.trigger ?? "manual",
+        startedAt: new Date(ctx.startedAt).toISOString(),
+        step: ctx.progress?.step ?? 0,
+        total: ctx.total ?? 0,
+        message: ctx.progress?.message ?? "",
+        blockedBy: ctx.blockedBy ?? [],
+      });
+    }
+    return items.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  }
+
   return {
     launch,
     resume,
     cancel,
+    snapshot,
     shutdown,
     replaceTargets,
     activity,

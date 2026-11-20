@@ -276,6 +276,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     activityFile: auditFile,
     logFile: log.file || join(dirname(state), "logs", "agent.jsonl"),
     shortcutLogDir: join(dirname(log.file || join(dirname(state), "logs", "agent.jsonl")), "shortcuts"),
+    runTraceDir: join(logDir, "runs"),
     codebuddy: {
       read: () => {
         const panel = readCodebuddyConfig(codebuddyFile);

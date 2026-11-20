@@ -3,7 +3,7 @@
  * 目录：logs/shortcuts/<targetId>/<taskId>.jsonl
  * 主日志只记触发和结束，并用相对路径指到这里。默认保留 30 天。
  */
-import { appendFileSync, existsSync, mkdirSync, readdirSync, rmdirSync, statSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 export const SHORTCUT_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -25,12 +25,17 @@ export function createShortcutRun({ root, targetId, taskId, now = Date.now() }) 
   const path = shortcutLogPath(root, targetId, taskId);
   pruneShortcutLogs(root, now);
   mkdirSync(path.dir, { recursive: true });
+  let step = 0;
   function write(level, msg) {
-    appendFileSync(path.file, `${JSON.stringify({ ts: new Date().toISOString(), level, msg: String(msg) })}\n`);
+    const row = { ts: new Date().toISOString(), level, msg: String(msg) };
+    if (step > 0) row.step = step;
+    appendFileSync(path.file, `${JSON.stringify(row)}\n`);
   }
   return {
     file: path.file,
     relative: path.relative,
+    /** 之后写的行归到第 index 步；0 表示不属于任何步（ADR-0021）。 */
+    setStep(index) { step = Number.isInteger(index) && index > 0 ? index : 0; },
     info(msg) { write("info", msg); },
     error(msg) { write("error", msg); },
     output(stream, text) {
@@ -62,6 +67,30 @@ export function shortcutRunFile(root, targetId, taskId) {
   if (!root || !TARGET_ID.test(targetId) || !TASK_ID.test(taskId)) return null;
   const file = shortcutLogPath(root, targetId, taskId).file;
   return existsSync(file) ? file : null;
+}
+
+/** 单次输出全部行（按时间正序），保留 step 字段。只读尾部 maxBytes，防止巨型输出拖垮界面。 */
+export function readShortcutRunLines(file, maxBytes = 2 * 1024 * 1024) {
+  if (!file || !existsSync(file)) return { lines: [], truncated: false };
+  const size = statSync(file).size;
+  let text = readFileSync(file, "utf8");
+  let truncated = false;
+  if (size > maxBytes) {
+    text = text.slice(-maxBytes);
+    text = text.slice(text.indexOf("\n") + 1);
+    truncated = true;
+  }
+  const lines = [];
+  for (const raw of text.split(/\r?\n/)) {
+    if (!raw.trim()) continue;
+    try {
+      const row = JSON.parse(raw);
+      lines.push({ ts: String(row.ts ?? ""), level: String(row.level ?? "info"), msg: String(row.msg ?? ""), ...(Number.isInteger(row.step) ? { step: row.step } : {}) });
+    } catch {
+      lines.push({ ts: "", level: "info", msg: raw });
+    }
+  }
+  return { lines, truncated };
 }
 
 export function pruneShortcutLogs(root, now = Date.now(), retentionMs = SHORTCUT_LOG_RETENTION_MS) {
