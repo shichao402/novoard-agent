@@ -11,7 +11,7 @@ export function HomePage({
   base: string;
   runtime: Runtime | null;
   tiles: Tile[];
-  onOpen: (view: "actions" | "chat") => void;
+  onOpen: (view: "targets" | "runs" | "chat") => void;
 }) {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
 
@@ -38,7 +38,7 @@ export function HomePage({
       <section className="rounded-2xl border border-line bg-panel p-5">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium">最近执行</h2>
-          <button className="text-[13px] text-accent hover:text-accent-hi" onClick={() => onOpen("actions")}>快捷操作</button>
+          <button className="text-[13px] text-accent hover:text-accent-hi" onClick={() => onOpen("runs")}>全部运行</button>
         </div>
         {events.length === 0 ? (
           <div className="mt-4 rounded-xl border border-dashed border-line-hi px-4 py-8 text-center">

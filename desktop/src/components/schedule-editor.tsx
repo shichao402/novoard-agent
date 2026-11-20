@@ -198,7 +198,7 @@ export function ScheduleEditor({
             </div>
           </div>
           {!scheduleEnabled ? (
-            <p className="text-[12px] text-warn">定时总开关现在是关着的，要到快捷操作页打开，定时才会真正触发。</p>
+            <p className="text-[12px] text-warn">定时总开关已关闭，在 Target 列表顶部打开</p>
           ) : null}
         </>
       ) : null}

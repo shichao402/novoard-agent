@@ -37,7 +37,46 @@ export type Tile = {
   lastScheduled?: { status: string; trigger?: string; slot?: string; at?: number; taskId?: string | null } | null;
   /** 带运行时输入（ADR-0020）：点击先弹选择框。 */
   inputs?: boolean;
+  /** 运行记录里最近一次（ADR-0021），含 Hub、定时触发。 */
+  lastRun?: RunSummary | null;
+  /** 该 target 的在途运行。 */
+  live?: LiveRun[];
 };
+
+/** 在途运行快照（ADR-0021）。state 为展示态：working、queued、input-required。 */
+export type LiveRun = {
+  taskId: string;
+  target: string;
+  title?: string;
+  state: string;
+  trigger?: string;
+  startedAt: string;
+  step?: number;
+  total?: number;
+  message?: string;
+  blockedBy?: string | null;
+};
+
+export type RunStep = { index: number; command?: string; startedAt?: string; endedAt?: string | null; exit?: number | null };
+
+/** 运行记录摘要。state 额外可能是 interrupted（无 run/end 且不在途）。 */
+export type RunSummary = {
+  taskId: string;
+  target: string;
+  title?: string;
+  trigger?: string;
+  timeout?: string;
+  startedAt: string;
+  endedAt?: string | null;
+  state: string;
+  steps: RunStep[];
+  failedStep?: { index: number; exit?: number | null } | null;
+  durationMs?: number | null;
+  log?: string | null;
+  live?: LiveRun;
+};
+
+export type RunLine = { ts?: string; level?: string; msg?: string; step?: number };
 
 /** target 的运行时输入定义（ADR-0020 §1）。choices 为静态列表或查询工具。 */
 export type TargetInput = {
@@ -155,6 +194,21 @@ export function setScheduleEnabled(base: string, enabled: boolean) {
 
 export function catchUpNow(base: string) {
   return request<{ ok: boolean; fired: Array<{ id: string; trigger: string; slot: string }> }>(base, "/api/schedule/catch-up", { method: "POST", body: "{}" });
+}
+
+export function getRuns(base: string, options: { target?: string; limit?: number } = {}) {
+  const params = new URLSearchParams();
+  if (options.target) params.set("target", options.target);
+  if (options.limit) params.set("limit", String(options.limit));
+  return request<{ ok: boolean; retentionDays: number; live: LiveRun[]; runs: RunSummary[] }>(base, `/api/runs?${params}`);
+}
+
+export function getRun(base: string, taskId: string) {
+  return request<{ ok: boolean; run: RunSummary; lines: RunLine[]; truncated: boolean }>(base, `/api/runs/${encodeURIComponent(taskId)}`);
+}
+
+export function cancelRun(base: string, taskId: string) {
+  return request<{ ok: boolean; reason?: string }>(base, `/api/runs/${encodeURIComponent(taskId)}/cancel`, { method: "POST", body: "{}" });
 }
 
 export type GitCredential = { url: string; username: string; tokenLastFour: string };

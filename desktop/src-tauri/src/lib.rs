@@ -413,8 +413,8 @@ fn build_tray(
 ) -> tauri::Result<()> {
     let open = MenuItemBuilder::with_id("open", "打开 Novoard").build(app)?;
     let chat = MenuItemBuilder::with_id("chat", "对话").build(app)?;
-    let actions = MenuItemBuilder::with_id("actions", "快捷操作").build(app)?;
     let targets = MenuItemBuilder::with_id("targets", "Target").build(app)?;
+    let runs = MenuItemBuilder::with_id("runs", "运行").build(app)?;
     let logs = MenuItemBuilder::with_id("logs", "日志").build(app)?;
     let settings = MenuItemBuilder::with_id("settings", "设置").build(app)?;
     let autostart = CheckMenuItemBuilder::with_id("autostart", "登录时启动")
@@ -424,7 +424,7 @@ fn build_tray(
     let update = MenuItemBuilder::with_id(updater::MENU_ID, "检查更新").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
     let menu = MenuBuilder::new(app)
-        .items(&[&open, &chat, &actions, &targets, &logs, &settings])
+        .items(&[&open, &chat, &targets, &runs, &logs, &settings])
         .separator()
         .item(&autostart)
         .item(&restart)
@@ -447,8 +447,8 @@ fn build_tray(
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "open" => reveal(app, &state_for_menu, "home"),
             "chat" => reveal(app, &state_for_menu, "chat"),
-            "actions" => reveal(app, &state_for_menu, "actions"),
             "targets" => reveal(app, &state_for_menu, "targets"),
+            "runs" => reveal(app, &state_for_menu, "runs"),
             "logs" => reveal(app, &state_for_menu, "logs"),
             "settings" => reveal(app, &state_for_menu, "settings"),
             "autostart" => toggle_autostart(app, &autostart_item),

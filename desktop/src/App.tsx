@@ -1,30 +1,35 @@
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { LayoutDashboard, MessageSquare, Package, ScrollText, Settings, SquareTerminal, Zap } from "lucide-react";
+import { Activity, LayoutDashboard, MessageSquare, Package, ScrollText, Settings, SquareTerminal } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EditionMark } from "@/components/edition-mark";
 import { edition } from "@/lib/edition";
 import { apiBase, getRuntime, getTiles, type Endpoint, type Runtime, type ScheduleInfo, type Tile } from "@/lib/api";
-import { ActionsPage } from "@/pages/actions-page";
+import { href, navigate, sectionOf, useRoute, type Section } from "@/lib/router";
 import { ChatPage } from "@/pages/chat-page";
 import { HomePage } from "@/pages/home-page";
 import { LogsPage } from "@/pages/logs-page";
 import { PacksPage } from "@/pages/packs-page";
+import { RunDetailPage } from "@/pages/run-detail-page";
+import { RunsPage } from "@/pages/runs-page";
 import { SettingsPage } from "@/pages/settings-page";
 import { SetupPage } from "@/pages/setup-page";
-import { TargetsPage } from "@/pages/targets-page";
+import { TargetDetailPage } from "@/pages/target-detail-page";
+import { TargetEditPage } from "@/pages/target-edit-page";
+import { TargetsListPage } from "@/pages/targets-list-page";
 
-type View = "home" | "chat" | "actions" | "targets" | "packs" | "logs" | "settings";
-
-const NAV: Array<{ id: View; label: string; icon: typeof LayoutDashboard }> = [
+const NAV: Array<{ id: Section; label: string; icon: typeof LayoutDashboard }> = [
   { id: "home", label: "概览", icon: LayoutDashboard },
   { id: "chat", label: "对话", icon: MessageSquare },
-  { id: "actions", label: "快捷操作", icon: Zap },
   { id: "targets", label: "Target", icon: SquareTerminal },
+  { id: "runs", label: "运行", icon: Activity },
   { id: "packs", label: "能力包", icon: Package },
   { id: "logs", label: "日志", icon: ScrollText },
   { id: "settings", label: "设置", icon: Settings },
 ];
+
+/** 托盘菜单等旧入口的视图名 → 路由（PRD-8：actions 并入 targets）。 */
+const LEGACY_VIEW: Record<string, string> = { actions: "targets" };
 
 function initialEndpoint(): Endpoint | null {
   const panel = new URLSearchParams(window.location.search).get("panel");
@@ -39,11 +44,14 @@ export function App() {
   const [notice, setNotice] = useState("正在启动本机 Agent…");
   const [noticeError, setNoticeError] = useState(false);
   const [toast, setToast] = useState("");
-  const [view, setView] = useState<View>("home");
+  const route = useRoute();
+  const section = sectionOf(route);
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [tiles, setTiles] = useState<Tile[]>([]);
   const [schedule, setSchedule] = useState<ScheduleInfo | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
+  const reload = () => setReloadTick((n) => n + 1);
+  const liveCount = tiles.reduce((sum, tile) => sum + (tile.live?.length ?? 0), 0);
 
   useEffect(() => {
     const unlisten: Array<() => void> = [];
@@ -56,8 +64,9 @@ export function App() {
       setToast(event.payload.message);
       setNoticeError(event.payload.error);
     }).then((stop) => unlisten.push(stop));
-    void listen<{ view: View }>("client-nav", (event) => {
-      if (NAV.some((item) => item.id === event.payload.view)) setView(event.payload.view);
+    void listen<{ view: string }>("client-nav", (event) => {
+      const view = LEGACY_VIEW[event.payload.view] ?? event.payload.view;
+      if (NAV.some((item) => item.id === view)) navigate(view);
     }).then((stop) => unlisten.push(stop));
     // sidecar 就绪可能早于本组件挂载（事件已发完），监听注册后补取一次缓存。
     void invoke<Endpoint | null>("agent_endpoint")
@@ -86,16 +95,29 @@ export function App() {
     if (!base || setup) return;
     let cancelled = false;
     let ticket = 0;
+    let timer = 0;
     const load = () => {
       const mine = ++ticket;
       void getRuntime(base).then((value) => { if (!cancelled && mine === ticket) setRuntime(value); }).catch(() => { if (!cancelled && mine === ticket) setRuntime(null); });
-      void getTiles(base).then((value) => { if (!cancelled && mine === ticket) { setTiles(value.tiles ?? []); setSchedule(value.schedule ?? null); } }).catch(() => { if (!cancelled && mine === ticket) setTiles([]); });
+      void getTiles(base)
+        .then((value) => {
+          if (cancelled || mine !== ticket) return;
+          const next = value.tiles ?? [];
+          setTiles(next);
+          setSchedule(value.schedule ?? null);
+          // 有在途时加快刷新，列表进度与角标跟得上
+          timer = window.setTimeout(load, next.some((tile) => (tile.live?.length ?? 0) > 0) ? 1500 : 4000);
+        })
+        .catch(() => {
+          if (cancelled || mine !== ticket) return;
+          setTiles([]);
+          timer = window.setTimeout(load, 4000);
+        });
     };
     load();
-    const timer = window.setInterval(load, 4000);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, [base, setup, reloadTick]);
 
@@ -111,6 +133,7 @@ export function App() {
 
   const online = runtime?.hubRegistered === true;
   const hubKnown = runtime !== null;
+  const fill = route.page === "chat" || route.page === "logs";
 
   return (
     <div className="grid h-dvh max-h-dvh min-h-0 grid-cols-[220px_minmax(0,1fr)] overflow-hidden bg-canvas">
@@ -125,16 +148,19 @@ export function App() {
         <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto px-2">
           {NAV.map((item) => {
             const Icon = item.icon;
-            const active = view === item.id;
+            const active = section === item.id;
             return (
-              <button
+              <a
                 key={item.id}
+                href={href(item.id)}
                 className={`flex h-9 items-center gap-2 rounded-lg px-3 text-[13px] ${active ? "bg-panel-hi text-ink" : "text-muted hover:bg-panel hover:text-ink"}`}
-                onClick={() => setView(item.id)}
               >
                 <Icon size={16} />
                 {item.label}
-              </button>
+                {item.id === "runs" && liveCount > 0 ? (
+                  <span className="ml-auto min-w-5 rounded-full bg-accent/20 px-1.5 text-center text-[11px] leading-5 text-accent">{liveCount}</span>
+                ) : null}
+              </a>
             );
           })}
         </nav>
@@ -144,7 +170,7 @@ export function App() {
       </aside>
       <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
         <header className="flex h-12 items-center justify-between border-b border-line px-5">
-          <div className="text-sm text-muted">{NAV.find((item) => item.id === view)?.label}</div>
+          <div className="text-sm text-muted">{NAV.find((item) => item.id === section)?.label}</div>
           <div className="flex items-center gap-2 text-xs text-muted" aria-live="polite">
             <span className={`size-2 rounded-full ${online ? "bg-good" : hubKnown ? "bg-warn" : "bg-line-hi"}`} />
             {online ? `Hub 在线 · ${runtime?.agentId ?? ""}` : hubKnown ? `Hub 未注册 · ${runtime?.agentId ?? "本机"}` : "正在读取状态"}
@@ -153,17 +179,21 @@ export function App() {
         {hubKnown && !online ? (
           <div className="flex items-center justify-between gap-3 border-b border-line bg-warn/10 px-5 py-2 text-xs text-warn">
             <span>Hub 还没有接受这台成员。检查成员 ID 是否和签发令牌时一致。</span>
-            <button className="text-ink underline-offset-2 hover:underline" onClick={() => setView("settings")}>去设置</button>
+            <a className="text-ink underline-offset-2 hover:underline" href={href("settings")}>去设置</a>
           </div>
         ) : null}
-        <div className={`min-h-0 flex-1 ${view === "chat" || view === "logs" ? "overflow-hidden p-4" : "overflow-auto p-5"}`}>
-          {view === "home" ? <HomePage base={base} runtime={runtime} tiles={tiles} onOpen={(next) => setView(next)} /> : null}
-          {view === "chat" ? <ChatPage base={base} /> : null}
-          {view === "actions" ? <ActionsPage base={base} tiles={tiles} schedule={schedule} onChanged={() => setReloadTick((n) => n + 1)} onOpenTargets={() => setView("targets")} onOpenPacks={() => setView("packs")} /> : null}
-          {view === "targets" ? <TargetsPage base={base} /> : null}
-          {view === "packs" ? <PacksPage base={base} /> : null}
-          {view === "logs" ? <LogsPage base={base} /> : null}
-          {view === "settings" ? <SettingsPage base={base} onRestart={() => setToast("正在用新配置重新连接 Hub…")} /> : null}
+        <div className={`min-h-0 flex-1 ${fill ? "overflow-hidden p-4" : "overflow-auto p-5"}`}>
+          {route.page === "home" ? <HomePage base={base} runtime={runtime} tiles={tiles} onOpen={(next) => navigate(next)} /> : null}
+          {route.page === "chat" ? <ChatPage base={base} /> : null}
+          {route.page === "targets" ? <TargetsListPage base={base} tiles={tiles} schedule={schedule} onChanged={reload} /> : null}
+          {route.page === "target-new" ? <TargetEditPage key="new" base={base} id={null} onSaved={reload} /> : null}
+          {route.page === "target" ? <TargetDetailPage key={route.id} base={base} id={route.id} tab={route.tab} tile={tiles.find((tile) => tile.id === route.id)} onChanged={reload} /> : null}
+          {route.page === "target-edit" ? <TargetEditPage key={route.id} base={base} id={route.id} onSaved={reload} /> : null}
+          {route.page === "runs" ? <RunsPage base={base} onChanged={reload} /> : null}
+          {route.page === "run" ? <RunDetailPage key={route.taskId} base={base} taskId={route.taskId} tiles={tiles} onChanged={reload} /> : null}
+          {route.page === "packs" ? <PacksPage base={base} /> : null}
+          {route.page === "logs" ? <LogsPage base={base} /> : null}
+          {route.page === "settings" ? <SettingsPage base={base} onRestart={() => setToast("正在用新配置重新连接 Hub…")} /> : null}
         </div>
       </div>
       {toast ? (
