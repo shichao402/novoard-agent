@@ -25,14 +25,20 @@ use crate::relkit_sidecar::{
 use serde::Serialize;
 use tauri::{menu::MenuItem, AppHandle, Emitter, Manager, Wry};
 
-use crate::{edition, Supervisor};
+use crate::{edition, Activity, Supervisor};
 
 const PRODUCT: &str = "novoard-agent";
 const BOOTSTRAP: &str = include_str!(concat!(env!("OUT_DIR"), "/relkit-bootstrap.json"));
 const RELEASE_CODE: Option<&str> = option_env!("NOVOARD_RELEASE_CODE");
 const RELEASE_VERSION: Option<&str> = option_env!("NOVOARD_RELEASE_VERSION");
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(60);
-const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// 检查节奏（ADR-0022，本机时间）：白天 [DAY_START, NIGHT_START) 每 5 分钟一次；
+/// 夜里只在 NIGHT_CHECK 检查一次，查到就下载，等空闲安装，正好避开夜间定时任务。
+const DAY_CHECK_INTERVAL_SECS: u32 = 5 * 60;
+const DAY_START_SECS: u32 = 8 * 3600;
+const NIGHT_START_SECS: u32 = 23 * 3600;
+const NIGHT_CHECK_SECS: u32 = 2 * 3600;
+const DAY_SECS: u32 = 24 * 3600;
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(250);
 
 pub const EVENT: &str = "update-status";
@@ -78,6 +84,17 @@ pub struct ProgressView {
 pub struct WaitingView {
     running: usize,
     pending_approval: usize,
+    chat_turns: usize,
+}
+
+impl From<Activity> for WaitingView {
+    fn from(activity: Activity) -> Self {
+        Self {
+            running: activity.running,
+            pending_approval: activity.pending_approval,
+            chat_turns: activity.chat_turns,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,8 +110,10 @@ pub struct UpdateView {
     progress: Option<ProgressView>,
     manual_url: Option<String>,
     checked_at: Option<u64>,
-    /// 已下载、用户已点安装，但 sidecar 还有在途任务：等它们结束后自动安装（ADR-0018）。
+    /// 已下载、等待安装，但 sidecar 还有在途任务或对话：等它们结束后自动安装（ADR-0018 / ADR-0022）。
     waiting_for_tasks: Option<WaitingView>,
+    /// 自动跟随：查到新版自动下载、空闲时自动安装（ADR-0022）。NOVOARD_AUTO_UPDATE=0 关闭。
+    auto: bool,
 }
 
 pub struct UpdateState {
@@ -127,6 +146,7 @@ impl UpdateState {
             manual_url: None,
             checked_at: None,
             waiting_for_tasks: None,
+            auto: auto_enabled(),
         };
         Arc::new(Self {
             updater: Mutex::new(None),
@@ -203,6 +223,51 @@ pub fn app_identity(app: &AppHandle) -> (String, &'static str) {
         .unwrap_or_else(|| app.package_info().version.to_string());
     let channel = if release_code().is_some() { channel() } else { "local" };
     (version, channel)
+}
+
+/// 自动跟随默认开启；调试或本地验证时设 NOVOARD_AUTO_UPDATE=0 关闭，只保留手动检查。
+fn auto_enabled() -> bool {
+    std::env::var("NOVOARD_AUTO_UPDATE").map(|value| value.trim() != "0").unwrap_or(true)
+}
+
+/// 下一次检查前等多久。`now` 是本机时间当天已过的秒数。
+/// 白天每 5 分钟；下一次若会落进夜里，就改等到下一个夜间检查点（02:00）或白天开始（08:00）。
+fn next_check_delay(now: u32) -> Duration {
+    let now = now % DAY_SECS;
+    let candidate = now + DAY_CHECK_INTERVAL_SECS;
+    if (DAY_START_SECS..NIGHT_START_SECS).contains(&candidate) {
+        return Duration::from_secs(DAY_CHECK_INTERVAL_SECS as u64);
+    }
+    let wait = if now < NIGHT_CHECK_SECS {
+        NIGHT_CHECK_SECS - now
+    } else if now < DAY_START_SECS {
+        DAY_START_SECS - now
+    } else {
+        DAY_SECS - now + NIGHT_CHECK_SECS
+    };
+    Duration::from_secs(wait.max(1) as u64)
+}
+
+fn local_seconds_of_day() -> u32 {
+    use chrono::Timelike;
+    chrono::Local::now().num_seconds_from_midnight()
+}
+
+/// 解析 `x.y.z`，忽略 `+build` 与 `-pre` 后缀。
+fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+    let core = text.trim().trim_start_matches('v');
+    let core = core.split(['+', '-']).next()?;
+    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
+    let version = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(version)
+}
+
+/// 本机版本是否低于 hub 推荐的版本；任一边解析不了就当作不低于，不触发升级。
+fn behind(current: &str, recommended: &str) -> bool {
+    match (parse_version(current), parse_version(recommended)) {
+        (Some(current), Some(recommended)) => current < recommended,
+        _ => false,
+    }
 }
 
 fn release_code() -> Option<i64> {
@@ -568,14 +633,17 @@ pub async fn download(app: AppHandle) -> UpdateView {
     })
 }
 
-/// 在途任务文案：只在有任务时返回。
-fn waiting_text(running: usize, pending_approval: usize) -> Option<String> {
+/// 在途文案：只在有任务或对话时返回。
+fn waiting_text(activity: Activity) -> Option<String> {
     let mut parts = Vec::new();
-    if running > 0 {
-        parts.push(format!("{running} 个任务正在执行"));
+    if activity.running > 0 {
+        parts.push(format!("{} 个任务正在执行", activity.running));
     }
-    if pending_approval > 0 {
-        parts.push(format!("{pending_approval} 个任务等待审批"));
+    if activity.pending_approval > 0 {
+        parts.push(format!("{} 个任务等待审批", activity.pending_approval));
+    }
+    if activity.chat_turns > 0 {
+        parts.push(format!("{} 个对话正在回复", activity.chat_turns));
     }
     if parts.is_empty() {
         None
@@ -584,8 +652,8 @@ fn waiting_text(running: usize, pending_approval: usize) -> Option<String> {
     }
 }
 
-/// 安装会退出 sidecar，内存里的任务表随之丢失（ADR-0011）。
-/// 所以默认等到没有执行中、也没有审批挂起的任务再装；`force` 是用户明确选择“立即安装”。
+/// 安装会退出 sidecar，内存里的任务表随之丢失（ADR-0011），进行中的对话也会断开。
+/// 所以默认等到没有执行中、审批挂起的任务和进行中的对话再装；`force` 是用户明确选择“立即安装”。
 pub async fn apply(app: AppHandle, force: bool) -> UpdateView {
     let state = state(&app);
     let snapshot = state.snapshot();
@@ -599,18 +667,18 @@ pub async fn apply(app: AppHandle, force: bool) -> UpdateView {
             view.message = Some("请先下载更新包".into());
         });
     }
-    let (running, pending_approval) = app.state::<Arc<Supervisor>>().activity();
+    let activity = app.state::<Arc<Supervisor>>().activity();
     if !force {
-        if let Some(text) = waiting_text(running, pending_approval) {
+        if let Some(text) = waiting_text(activity) {
             state.install_when_idle.store(true, Ordering::SeqCst);
-            log::info!("更新已就绪，等待在途任务结束：running={running} pendingApproval={pending_approval}");
+            log::info!("更新已就绪，等待在途任务结束：{activity:?}");
             return state.update(&app, |view| {
                 view.message = Some(text);
-                view.waiting_for_tasks = Some(WaitingView { running, pending_approval });
+                view.waiting_for_tasks = Some(activity.into());
             });
         }
-    } else if running + pending_approval > 0 {
-        log::warn!("用户选择立即安装，将中断在途任务：running={running} pendingApproval={pending_approval}");
+    } else if !activity.idle() {
+        log::warn!("用户选择立即安装，将中断在途任务：{activity:?}");
     }
     state.install_when_idle.store(false, Ordering::SeqCst);
     let Some(_guard) = BusyGuard::acquire(&state) else {
@@ -687,11 +755,11 @@ pub fn on_activity(app: &AppHandle) {
     if !state.install_when_idle.load(Ordering::SeqCst) {
         return;
     }
-    let (running, pending_approval) = app.state::<Arc<Supervisor>>().activity();
-    if let Some(text) = waiting_text(running, pending_approval) {
+    let activity = app.state::<Arc<Supervisor>>().activity();
+    if let Some(text) = waiting_text(activity) {
         state.update(app, |view| {
             view.message = Some(text);
-            view.waiting_for_tasks = Some(WaitingView { running, pending_approval });
+            view.waiting_for_tasks = Some(activity.into());
         });
         return;
     }
@@ -705,7 +773,58 @@ pub fn on_activity(app: &AppHandle) {
     });
 }
 
-/// 启动后先汇报上次更新会话结果，再按间隔做非强制检查（引擎负责节流）。
+/// 自动跟随一次（ADR-0022）：检查 → 有新版就下载 → 交给 apply 等空闲安装。
+/// 关闭自动跟随时只检查、只提示，下载和安装仍由用户点。
+async fn follow(app: AppHandle, why: &'static str) {
+    let state = state(&app);
+    let snapshot = state.snapshot();
+    if !snapshot.enabled || matches!(snapshot.phase, Phase::Downloading | Phase::Applying) {
+        return;
+    }
+    if snapshot.phase != Phase::Downloaded {
+        // 定时与 hub 提示都强制检查：节奏由这里控制，不再叠加引擎节流
+        let view = check(app.clone(), true).await;
+        if !snapshot.auto || view.phase != Phase::Available {
+            return;
+        }
+        let version = view.available.as_ref().map(|next| next.version.clone()).unwrap_or_default();
+        log::info!("自动更新（{why}）：发现 v{version}，开始下载");
+        if download(app.clone()).await.phase != Phase::Downloaded {
+            return;
+        }
+    } else if !snapshot.auto {
+        return;
+    }
+    apply(app, false).await;
+}
+
+/// hub 的升级提示（契约 v2.8）：推荐版本高于本机，或握手因契约不兼容被拒，就立刻跟随一次。
+pub fn on_hint(app: &AppHandle, recommended: Option<String>, reason: Option<String>) {
+    let Some(state) = app.try_state::<Arc<UpdateState>>().map(|s| s.inner().clone()) else {
+        return;
+    };
+    let snapshot = state.snapshot();
+    let reason = reason.unwrap_or_default();
+    let mismatch = reason.starts_with("contract-");
+    let outdated = recommended
+        .as_deref()
+        .is_some_and(|version| behind(&snapshot.current_version, version));
+    if !mismatch && !outdated {
+        return;
+    }
+    let target = recommended.as_deref().unwrap_or("最新");
+    if !snapshot.enabled {
+        log::warn!("hub 提示升级到 {target}（{reason}），但此构建未接入更新：{}", snapshot.message.unwrap_or_default());
+        return;
+    }
+    log::info!("hub 提示升级：本机 v{} → {target}（{reason}），立即检查更新", snapshot.current_version);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        follow(app, "hub 提示").await;
+    });
+}
+
+/// 启动后先汇报上次更新会话结果，再按节奏自动跟随：白天每 5 分钟，夜里只在 02:00。
 pub fn start(app: &AppHandle) {
     if !state(app).snapshot().enabled {
         return;
@@ -715,14 +834,8 @@ pub fn start(app: &AppHandle) {
         report_last_session(&app).await;
         tokio::time::sleep(FIRST_CHECK_DELAY).await;
         loop {
-            let phase = state(&app).snapshot().phase;
-            if !matches!(
-                phase,
-                Phase::Downloading | Phase::Downloaded | Phase::Applying
-            ) {
-                check(app.clone(), false).await;
-            }
-            tokio::time::sleep(CHECK_INTERVAL).await;
+            follow(app.clone(), "定时检查").await;
+            tokio::time::sleep(next_check_delay(local_seconds_of_day())).await;
         }
     });
 }
@@ -807,21 +920,66 @@ mod tests {
         assert_eq!(layout.sidecar_relpath, "relkit-updater.exe");
     }
 
+    fn activity(running: usize, pending_approval: usize, chat_turns: usize) -> Activity {
+        Activity { running, pending_approval, chat_turns }
+    }
+
     #[test]
     fn waiting_text_only_when_tasks_in_flight() {
-        assert_eq!(waiting_text(0, 0), None);
+        assert_eq!(waiting_text(activity(0, 0, 0)), None);
         assert_eq!(
-            waiting_text(1, 0).as_deref(),
+            waiting_text(activity(1, 0, 0)).as_deref(),
             Some("1 个任务正在执行，全部结束后自动安装。")
         );
         assert_eq!(
-            waiting_text(2, 1).as_deref(),
+            waiting_text(activity(2, 1, 0)).as_deref(),
             Some("2 个任务正在执行、1 个任务等待审批，全部结束后自动安装。")
         );
         assert_eq!(
-            waiting_text(0, 3).as_deref(),
+            waiting_text(activity(0, 3, 0)).as_deref(),
             Some("3 个任务等待审批，全部结束后自动安装。")
         );
+        assert_eq!(
+            waiting_text(activity(0, 0, 1)).as_deref(),
+            Some("1 个对话正在回复，全部结束后自动安装。")
+        );
+    }
+
+    fn at(hour: u32, minute: u32) -> u32 {
+        hour * 3600 + minute * 60
+    }
+
+    #[test]
+    fn day_checks_every_five_minutes() {
+        assert_eq!(next_check_delay(at(8, 0)), Duration::from_secs(300));
+        assert_eq!(next_check_delay(at(14, 30)), Duration::from_secs(300));
+        assert_eq!(next_check_delay(at(22, 54)), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn night_checks_only_at_two_then_waits_for_morning() {
+        // 22:56 再等 5 分钟就进夜里：直接等到次日 02:00
+        assert_eq!(next_check_delay(at(22, 56)), Duration::from_secs((at(24, 0) - at(22, 56) + at(2, 0)) as u64));
+        assert_eq!(next_check_delay(at(23, 30)), Duration::from_secs((at(24, 0) - at(23, 30) + at(2, 0)) as u64));
+        assert_eq!(next_check_delay(at(0, 15)), Duration::from_secs((at(2, 0) - at(0, 15)) as u64));
+        // 02:00 查完，下一次是 08:00 白天开始
+        assert_eq!(next_check_delay(at(2, 0)), Duration::from_secs((at(8, 0) - at(2, 0)) as u64));
+        // 07:54 + 5 分钟 = 07:59 仍是夜里：等到 08:00
+        assert_eq!(next_check_delay(at(7, 54)), Duration::from_secs((at(8, 0) - at(7, 54)) as u64));
+        // 07:56 + 5 分钟 = 08:01 已是白天
+        assert_eq!(next_check_delay(at(7, 56)), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn behind_compares_semver_core_only() {
+        assert!(behind("0.3.13", "0.3.14"));
+        assert!(behind("0.3.14", "0.10.0"));
+        assert!(!behind("0.3.14", "0.3.14"));
+        assert!(!behind("0.4.0", "0.3.14"));
+        assert!(!behind("0.3.14+48", "0.3.14"));
+        assert!(behind("v0.3.13+47", "0.3.14"));
+        assert!(!behind("dev", "0.3.14"));
+        assert!(!behind("0.3.13", "latest"));
     }
 
     #[test]
@@ -871,6 +1029,7 @@ mod tests {
             manual_url: None,
             checked_at: None,
             waiting_for_tasks: None,
+            auto: true,
         };
         apply_check_result(
             &mut view,

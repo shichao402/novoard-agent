@@ -21,6 +21,11 @@
       "pattern": "^\\d+\\.\\d+$",
       "description": "hello 里带的 contractVersion 回显，便于对端确认自己发的是什么"
     },
+    "recommendedAgentVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "hub 推荐的 agent 程序版本 x.y.z（契约 v2.8）。agent 程序版本低于它时立刻检查更新，空闲时自动安装；缺省表示 hub 不推荐"
+    },
     "retryable": { "type": "boolean" },
     "detail": {
       "type": "array",

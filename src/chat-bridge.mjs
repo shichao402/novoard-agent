@@ -70,7 +70,7 @@ export function codebuddyFingerprint(configured) {
  * env 是会话进程的基础环境。GUI 拉起时进程 PATH 只有系统目录，找不到 Homebrew 等装的 Node，
  * 所以宿主应传入与 target 脚本相同的登录 shell 环境（resolveScriptEnv）；不传时沿用进程环境。
  */
-export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPath, nodePath, env = process.env, log = console } = {}) {
+export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPath, nodePath, env = process.env, log = console, onTurnsChange } = {}) {
   if (!dataDir) throw new Error("createChatBridge 需要 dataDir");
   const sessionDir = join(dataDir, "sessions");
   const agentHome = join(dataDir, "agent-home");
@@ -94,6 +94,16 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
   function busy() {
     for (const item of pending.values()) if (item.op === "send") return true;
     return false;
+  }
+
+  let lastTurns = 0;
+  /** 进行中的轮次数变化时告诉宿主：桌面壳据此推迟自动安装更新，不打断对话（ADR-0022）。 */
+  function turnsChanged() {
+    let turns = 0;
+    for (const item of pending.values()) if (item.op === "send") turns += 1;
+    if (turns === lastTurns) return;
+    lastTurns = turns;
+    try { onTurnsChange?.(turns); } catch { /* 上报失败不影响对话 */ }
   }
 
   /** 设置里改了配置但当时有轮次在跑：等手上的请求全部结束再重启（含停止等短请求，不能误伤）。 */
@@ -133,6 +143,7 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
   function failAll(error) {
     for (const item of pending.values()) item.reject(error);
     pending.clear();
+    turnsChanged();
   }
 
   function onData(chunk) {
@@ -167,10 +178,12 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
         const error = new Error(payload.error);
         if (payload.code) error.code = payload.code;
         item.reject(error);
+        turnsChanged();
         settle();
       } else if (Object.prototype.hasOwnProperty.call(payload, "result")) {
         pending.delete(payload.id);
         item.resolve(payload.result);
+        turnsChanged();
         settle();
       }
     }
@@ -226,6 +239,7 @@ export function createChatBridge({ dataDir, codebuddyFile, decEnvFile, workerPat
     const id = seq++;
     return ensure().then((proc) => new Promise((resolve, reject) => {
       pending.set(id, { op, resolve, reject, onEvent, onAccepted });
+      turnsChanged();
       proc.stdin.write(`${JSON.stringify({ id, op, ...params })}\n`);
     }));
   }

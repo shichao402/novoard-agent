@@ -28,7 +28,7 @@ function phaseText(view: UpdateView) {
       return `正在下载更新${percent}（${formatBytes(progress.received)}${progress.total > 0 ? ` / ${formatBytes(progress.total)}` : ""}）`;
     }
     case "downloaded":
-      if (view.waitingForTasks) return view.message || "还有任务在执行，结束后自动安装。";
+      if (view.waitingForTasks) return view.message || "还有任务或对话在进行，结束后自动安装。";
       return `新版本 ${view.available?.version ?? ""} 已下载，安装时会退出并自动重启。`;
     case "applying":
       return "正在安装更新，应用即将退出并重启…";
@@ -105,6 +105,9 @@ export function UpdateSection() {
         ) : null}
       </div>
       <p className={`text-xs leading-5 ${tone}`}>{phaseText(view)}</p>
+      {view.enabled && view.auto ? (
+        <p className="text-xs leading-5 text-muted">自动更新已开启：白天每 5 分钟检查一次，夜间仅在 02:00 检查；没有任务和对话在进行时自动安装并重启。</p>
+      ) : null}
       {view.available?.mandatory ? <p className="text-xs leading-5 text-bad">这是一次必须安装的更新。</p> : null}
       {notes && (view.phase === "available" || view.phase === "downloading" || view.phase === "downloaded") ? (
         <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-surface px-3 py-2 text-xs leading-5 text-muted">{notes}</pre>

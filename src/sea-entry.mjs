@@ -100,8 +100,10 @@ async function bootAgent() {
     agentDir: join(DATA_DIR, "agents", probe.agentId),
     stateDir: join(DATA_DIR, ".agent-state"),
     log: serviceLog,
-    // 在途任务数变化时告诉桌面壳，壳据此决定能否重启安装更新（ADR-0018）
+    // 在途任务与对话轮次变化时告诉桌面壳，壳据此决定能否重启安装更新（ADR-0018 / ADR-0022）
     onActivity: (activity) => emit("activity", activity),
+    // hub 推荐了更新的 agent 版本，或握手因契约不兼容被拒：壳立刻检查更新（ADR-0022）
+    onUpdateHint: (hint) => emit("update-hint", hint),
     onFatal: async (fatal) => {
       emit("fatal", fatal);
       await shutdown("agent-fatal", 1);

@@ -532,8 +532,10 @@ export type UpdateView = {
   } | null;
   progress: { received: number; total: number; bytesPerSecond: number } | null;
   manualUrl: string | null;
-  /** 用户已点安装、但还有在途任务：结束后自动安装（ADR-0018）。 */
-  waitingForTasks?: { running: number; pendingApproval: number } | null;
+  /** 已下载、但还有在途任务或对话：结束后自动安装（ADR-0018 / ADR-0022）。 */
+  waitingForTasks?: { running: number; pendingApproval: number; chatTurns: number } | null;
+  /** 自动跟随：空闲时自动检查、下载并安装（ADR-0022）；NOVOARD_AUTO_UPDATE=0 关闭。 */
+  auto?: boolean;
   checkedAt: number | null;
 };
 

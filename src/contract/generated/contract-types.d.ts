@@ -82,6 +82,8 @@ export type FrameAgentHelloAck = {
   "inFlightTaskIds": string[];
   /** hub 侧契约版本，便于 agent 记录双方版本（契约 §8 可观测性） */
   "hubVersion"?: string;
+  /** hub 推荐的 agent 程序版本 x.y.z（契约 v2.8）。agent 程序版本低于它时立刻检查更新，空闲时自动安装；缺省表示 hub 不推荐 */
+  "recommendedAgentVersion"?: string;
   /** 能力包来源清单（契约 v2.4；v2.5 起 id 可选）：agent 包管理器据此拉取能力包；缺省表示 hub 未下发 */
   "packSources"?: {
     /** 包名覆盖（v2.5 起可选）：缺省时 agent 从包根 toolset.json 的 id 自动发现包名；v2.7 起不带 id 的项是整仓来源 */
@@ -104,6 +106,8 @@ export type FrameAgentHelloNack = {
   "hubVersion": string;
   /** hello 里带的 contractVersion 回显，便于对端确认自己发的是什么 */
   "agentVersion"?: string;
+  /** hub 推荐的 agent 程序版本 x.y.z（契约 v2.8）。agent 程序版本低于它时立刻检查更新，空闲时自动安装；缺省表示 hub 不推荐 */
+  "recommendedAgentVersion"?: string;
   "retryable"?: boolean;
   /** 字段级校验错误的实例路径与原因，逐条列出 */
   "detail"?: string[];

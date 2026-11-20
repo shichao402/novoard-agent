@@ -40,7 +40,7 @@ async function waitFor(predicate, timeoutMs = 5000) {
 }
 
 /** 只做一件事的假 hub：数到第 N 次 hello 之前一直回指定的 nack，之后回 ack。 */
-async function conflictHub({ conflicts, reason = "instance-conflict", retryable = true }) {
+async function conflictHub({ conflicts, reason = "instance-conflict", retryable = true, ackExtra = {} }) {
   const hellos = [];
   const server = createServer((req, res) => { res.writeHead(404); res.end(); });
   const wss = new WebSocketServer({ noServer: true });
@@ -59,7 +59,7 @@ async function conflictHub({ conflicts, reason = "instance-conflict", retryable 
         ops({ type: "agent.hello.nack", reason, hubVersion: "2.1", ...(retryable ? { retryable: true } : {}) });
         return;
       }
-      ops({ type: "agent.hello.ack", inFlightTaskIds: [] });
+      ops({ type: "agent.hello.ack", inFlightTaskIds: [], ...ackExtra });
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -139,6 +139,58 @@ test("配置错误仍是致命：不可重试的 nack 触发 onFatal", async () 
     // 致命路径不重试：hello 只应发生一次
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(hub.hellos.length, 1);
+  } finally {
+    client.close();
+    await hub.close();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+function hintClient(hub, stateDir, hints, fatals = []) {
+  return createTunnelClient({
+    config: {
+      ok: true,
+      agentId: "agent-a",
+      hubUrl: `ws://127.0.0.1:${hub.port}/tunnel`,
+      agentToken: "agent-a-secret",
+      contractVersion: "2.8",
+    },
+    card: CARD,
+    targets: {},
+    runner: RUNNER,
+    stateDir,
+    log: { info() {}, error() {} },
+    onFatal(event) { fatals.push(event); },
+    onUpdateHint(hint) { hints.push(hint); },
+  });
+}
+
+test("hello.ack 带 recommendedAgentVersion：上报 hub-recommended 提示", async () => {
+  const hub = await conflictHub({ conflicts: 0, ackExtra: { recommendedAgentVersion: "0.3.15" } });
+  const stateDir = mkdtempSync(join(tmpdir(), "novoard-agent-hint-"));
+  const hints = [];
+  const client = hintClient(hub, stateDir, hints);
+  try {
+    await client.start();
+    await waitFor(() => hints.length > 0);
+    assert.deepEqual(hints[0], { reason: "hub-recommended", recommendedVersion: "0.3.15" });
+  } finally {
+    client.close();
+    await hub.close();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("契约不兼容 nack：致命退出之前先上报更新提示", async () => {
+  const hub = await conflictHub({ conflicts: Number.MAX_SAFE_INTEGER, reason: "contract-schema-mismatch", retryable: false });
+  const stateDir = mkdtempSync(join(tmpdir(), "novoard-agent-hint-nack-"));
+  const hints = [];
+  const fatals = [];
+  const client = hintClient(hub, stateDir, hints, fatals);
+  try {
+    await client.start();
+    await waitFor(() => fatals.length > 0);
+    assert.equal(hints[0]?.reason, "contract-schema-mismatch");
   } finally {
     client.close();
     await hub.close();

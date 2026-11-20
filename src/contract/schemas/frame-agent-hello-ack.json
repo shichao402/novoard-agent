@@ -16,6 +16,11 @@
       "pattern": "^\\d+\\.\\d+$",
       "description": "hub 侧契约版本，便于 agent 记录双方版本（契约 §8 可观测性）"
     },
+    "recommendedAgentVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "hub 推荐的 agent 程序版本 x.y.z（契约 v2.8）。agent 程序版本低于它时立刻检查更新，空闲时自动安装；缺省表示 hub 不推荐"
+    },
     "packSources": {
       "type": "array",
       "description": "能力包来源清单（契约 v2.4；v2.5 起 id 可选）：agent 包管理器据此拉取能力包；缺省表示 hub 未下发",

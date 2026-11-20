@@ -38,9 +38,25 @@ struct Supervisor {
     open_on_ready: AtomicBool,
     /// 最近一次 ui-ready 事件。WebView 挂载晚于 sidecar 就绪时，靠它补发，避免永久卡在启动中。
     last_ready: Mutex<Option<HostEvent>>,
-    /// sidecar 最近一次 activity 事件：执行中与审批挂起的任务数。更新安装据此等待空闲（ADR-0018）。
+    /// sidecar 最近一次 activity 事件：执行中与审批挂起的任务数、进行中的对话轮次。
+    /// 更新安装据此等待空闲（ADR-0018 / ADR-0022）。
     tasks_running: AtomicUsize,
     tasks_pending_approval: AtomicUsize,
+    chat_turns: AtomicUsize,
+}
+
+/// sidecar 的在途统计。三项都为 0 才算空闲，才能重启安装更新。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Activity {
+    pub running: usize,
+    pub pending_approval: usize,
+    pub chat_turns: usize,
+}
+
+impl Activity {
+    pub fn idle(&self) -> bool {
+        self.running + self.pending_approval + self.chat_turns == 0
+    }
 }
 
 impl Supervisor {
@@ -55,20 +71,23 @@ impl Supervisor {
             last_ready: Mutex::new(None),
             tasks_running: AtomicUsize::new(0),
             tasks_pending_approval: AtomicUsize::new(0),
+            chat_turns: AtomicUsize::new(0),
         })
     }
 
-    /// (执行中, 审批挂起)。sidecar 未启动或已退出时为 (0, 0)：任务表只在内存里，进程没了就没有可保护的任务。
-    fn activity(&self) -> (usize, usize) {
-        (
-            self.tasks_running.load(Ordering::SeqCst),
-            self.tasks_pending_approval.load(Ordering::SeqCst),
-        )
+    /// sidecar 未启动或已退出时全为 0：任务表和对话进程都随 sidecar 退出，没有可保护的东西。
+    fn activity(&self) -> Activity {
+        Activity {
+            running: self.tasks_running.load(Ordering::SeqCst),
+            pending_approval: self.tasks_pending_approval.load(Ordering::SeqCst),
+            chat_turns: self.chat_turns.load(Ordering::SeqCst),
+        }
     }
 
-    fn set_activity(&self, running: usize, pending_approval: usize) {
-        self.tasks_running.store(running, Ordering::SeqCst);
-        self.tasks_pending_approval.store(pending_approval, Ordering::SeqCst);
+    fn set_activity(&self, activity: Activity) {
+        self.tasks_running.store(activity.running, Ordering::SeqCst);
+        self.tasks_pending_approval.store(activity.pending_approval, Ordering::SeqCst);
+        self.chat_turns.store(activity.chat_turns, Ordering::SeqCst);
     }
 }
 
@@ -88,6 +107,14 @@ struct HostEvent {
     running: Option<usize>,
     #[serde(default)]
     pending_approval: Option<usize>,
+    #[serde(default)]
+    chat_turns: Option<usize>,
+    /// update-hint：hub 推荐的 agent 程序版本（契约 v2.8）
+    #[serde(default)]
+    recommended_version: Option<String>,
+    /// update-hint：hub-recommended，或握手被拒的原因 contract-*-mismatch
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 pub fn run() {
@@ -306,7 +333,7 @@ fn spawn_sidecar(app: AppHandle, state: Arc<Supervisor>) -> Result<(), String> {
                         child.take();
                     }
                     // 任务表只在 sidecar 内存里，进程没了就没有在途任务
-                    state_for_events.set_activity(0, 0);
+                    state_for_events.set_activity(Activity::default());
                     updater::on_activity(&app_for_events);
                     handle_terminated(
                         app_for_events.clone(),
@@ -361,11 +388,15 @@ fn handle_host_line(app: &AppHandle, state: &Arc<Supervisor>, line: &str) {
             set_host_status(app, &message, true);
         }
         "activity" => {
-            state.set_activity(
-                event.running.unwrap_or(0),
-                event.pending_approval.unwrap_or(0),
-            );
+            state.set_activity(Activity {
+                running: event.running.unwrap_or(0),
+                pending_approval: event.pending_approval.unwrap_or(0),
+                chat_turns: event.chat_turns.unwrap_or(0),
+            });
             updater::on_activity(app);
+        }
+        "update-hint" => {
+            updater::on_hint(app, event.recommended_version, event.reason);
         }
         _ => {}
     }

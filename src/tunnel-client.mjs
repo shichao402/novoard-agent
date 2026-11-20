@@ -42,7 +42,10 @@ function callerParts(parts, text) {
   return outgoing;
 }
 
-export function createTunnelClient({ config, card, targets, runner, stateDir, runTraceDir, bootId = "", app, log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice, onPackSources, inputMemory = null } = {}) {
+/** 这两种 hello 拒绝说明两侧契约不兼容，升级 agent 是唯一出路（契约 §4.1，v2.8）。 */
+const CONTRACT_MISMATCH_REASONS = new Set(["contract-major-mismatch", "contract-schema-mismatch"]);
+
+export function createTunnelClient({ config, card, targets, runner, stateDir, runTraceDir, bootId = "", app, log = console, fetchImpl = fetch, onFatal, onAgentMessage, onAgentNotice, onPackSources, onUpdateHint, inputMemory = null } = {}) {
   if (!config?.ok) throw new Error(`lite-agent 配置无效：${config?.reason}`);
   const { agentId, hubUrl, agentToken, contractVersion } = config;
   const hubHttpUrl = new URL(hubUrl);
@@ -300,6 +303,13 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
     helloTimer.unref?.();
   }
 
+  /** 升级提示转交桌面壳；回调异常不影响握手。 */
+  function reportUpdateHint({ reason, recommendedVersion }) {
+    if (typeof onUpdateHint !== "function") return;
+    const hint = { reason, ...(typeof recommendedVersion === "string" && recommendedVersion ? { recommendedVersion } : {}) };
+    try { onUpdateHint(hint); } catch (error) { log.warn?.(`升级提示转交失败：${error?.message ?? error}`); }
+  }
+
   function handleDownlink(raw) {
     let frame;
     try { frame = JSON.parse(String(raw)); } catch { return; }
@@ -315,6 +325,10 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
           // 只关连接：close 处理器统一走 scheduleReconnect，避免这里再排一次造成并发连接
           try { ws?.close(1000, "instance-conflict"); } catch { /* 已关闭 */ }
           return;
+        }
+        // 契约不兼容说明本端落后（或 hub 落后）：先把升级提示交给桌面壳，壳立刻检查更新（契约 v2.8，ADR-0022）
+        if (CONTRACT_MISMATCH_REASONS.has(body.reason)) {
+          reportUpdateHint({ reason: body.reason, recommendedVersion: body.recommendedAgentVersion });
         }
         // 契约不兼容类拒绝：把 hub 侧给出的字段级 detail 一并打印，便于直接定位是哪一侧落后
         const detailText = Array.isArray(body.detail) && body.detail.length ? `；字段错误：${body.detail.join("; ")}` : "";
@@ -337,6 +351,10 @@ export function createTunnelClient({ config, card, targets, runner, stateDir, ru
         clearHelloDeadline();
         registered = true;
         backoffMs = RETRY_BASE_MS;
+        // 推荐的 agent 程序版本（契约 v2.8）：比不比本机新由桌面壳判断，这里只转交
+        if (typeof body.recommendedAgentVersion === "string" && body.recommendedAgentVersion) {
+          reportUpdateHint({ reason: "hub-recommended", recommendedVersion: body.recommendedAgentVersion });
+        }
         // 能力包来源（契约 v2.4，PRD-7 A5）：字段缺省 = hub 没下发，保留本地缓存；空数组 = 清空
         if (Array.isArray(body.packSources)) {
           try { onPackSources?.(body.packSources); } catch (error) { log.warn?.(`[packs] 缓存能力包来源失败：${error?.message ?? error}`); }

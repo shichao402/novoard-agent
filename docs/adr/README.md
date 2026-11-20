@@ -17,6 +17,7 @@
 | [0016](0016-desktop-shell-over-pwa-tiles.md) | 桌面载体由 PWA 磁贴转向 Tauri 壳 | Accepted | 2026-10-20 |
 | [0017](0017-desktop-relkit-updates.md) | 桌面壳通过 Relkit 自动更新 | Accepted | 2026-11-03 |
 | [0018](0018-defer-update-until-idle.md) | 更新安装等在途任务结束再重启 | Accepted | 2026-11-06 |
+| [0022](0022-auto-follow-updates.md) | 空闲时自动跟随 hub 推荐版本 | Accepted | 2026-11-20 |
 
 ### 执行
 

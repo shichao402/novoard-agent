@@ -65,7 +65,7 @@ export async function createLiteAgent(options = {}) {
   }
 }
 
-async function buildAgent({ agentDir, log = console, onFatal, onActivity, config, state, env = process.env, now }) {
+async function buildAgent({ agentDir, log = console, onFatal, onActivity, onUpdateHint, config, state, env = process.env, now }) {
   const dir = agentDir ?? (HERE ? join(HERE, "..", "..", "agents", config.agentId) : null);
   if (!dir) throw new Error("SEA/打包形态必须显式传 agentDir（sea-entry 以 cwd 锚定传入）");
   const auditFile = join(state, "audit.jsonl");
@@ -114,6 +114,14 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   // 磁贴运行时输入（ADR-0020）：last 记在 <dataDir>/input-memory.json；查询工具进程外调用，15 秒超时
   const inputMemory = createInputMemory({ file: join(state, "input-memory.json") });
   const inputService = createInputService({ packs, memory: inputMemory, env: scriptEnv.env, log });
+  // 在途统计交给桌面壳，壳据此决定能否重启安装更新（ADR-0018 / ADR-0022）：
+  // 快捷方式任务（执行中、审批挂起）和进行中的对话轮次都算在途
+  let taskActivity = { running: 0, pendingApproval: 0 };
+  let chatTurns = 0;
+  function reportActivity() {
+    if (typeof onActivity !== "function") return;
+    try { onActivity({ ...taskActivity, chatTurns }); } catch { /* 上报失败不影响任务 */ }
+  }
   const runtime = createAgentRuntime({
     targets: expanded.targets,
     log,
@@ -124,7 +132,10 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     diagnose: (steps) => diagnoser.diagnoseSteps(steps),
     shortcutLogDir: join(logDir, "shortcuts"),
     runTraceDir: join(logDir, "runs"),
-    onActivity,
+    onActivity: (current) => {
+      taskActivity = current;
+      reportActivity();
+    },
   });
 
   // target 编辑器后端（M6）：保存 → 从盘重装载 → 热替换 runtime/localA2A 注册表 → card.update 上报 hub
@@ -198,6 +209,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
     onAgentMessage: (message) => peer?.receive(message),
     onAgentNotice: (message) => peer?.note(message),
     inputMemory,
+    onUpdateHint,
     onPackSources: (list) => {
       const r = packSources.replace(list);
       log.info?.(`[packs] 已缓存 hub 下发的能力包来源 ${r.count} 条`);
@@ -234,7 +246,16 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, config
   /** 调度器在 localA2A 之后创建；控制台定时接口经此引用访问，启动完成前返回未就绪。 */
   const scheduleRef = { current: null };
   // 会话进程与 target 脚本用同一个环境：GUI 拉起时进程 PATH 没有 /usr/local/bin、/opt/homebrew/bin，找不到 Node
-  const chat = createChatBridge({ dataDir: state, codebuddyFile, env: scriptEnv.env, log });
+  const chat = createChatBridge({
+    dataDir: state,
+    codebuddyFile,
+    env: scriptEnv.env,
+    log,
+    onTurnsChange: (turns) => {
+      chatTurns = turns;
+      reportActivity();
+    },
+  });
   const localA2A = createLocalA2A({
     port: Number(config.localPort ?? 0),
     host: config.uiHost,

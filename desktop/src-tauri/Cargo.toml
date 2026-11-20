@@ -23,6 +23,7 @@ pbjson-build = "0.7"
 protoc-bin-vendored = "3"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 log = "0.4"
 pbjson = "0.7"
 pbjson-types = "0.7"
