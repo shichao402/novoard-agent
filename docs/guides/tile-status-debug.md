@@ -75,13 +75,13 @@ tile.last.state === "completed" ? "完成" : tile.last.state === "failed" ? "失
 
 `submitted` / `working` / `input-required` / `rejected` 都会显示英文。这是 [PRD-1](../prd/prd-1-console-and-tiles.md) F1 的另一半。
 
-## sidecar 重启后全部回到尚未运行
+## sidecar 重启后最近结果消失
 
-预期行为。任务表在内存（[ADR-0011](../adr/0011-task-table-in-memory.md)）。历史输出在 `logs/shortcuts/`，能查到内容，但状态不再恢复。
+不应发生。任务表虽在内存（[ADR-0011](../adr/0011-task-table-in-memory.md)），但最近一次结果从运行记录 `logs/runs/<taskId>.jsonl` 读取（[ADR-0021](../adr/0021-run-history-from-trace.md)）。如果重启后 Target 列表显示「尚未运行」，先看 `logs/runs/` 下有没有该 target 的记录、是否已超过 30 天保留期。重启时正在跑的那次会显示「中断」，这是预期行为。
 
-## 委派任务在磁贴上看不到
+## 委派任务在列表里看不到
 
-预期行为。委派任务不写本地任务表，只存在 `agent-runtime` 的 `running` Map 里。`/api/tiles` 与 `/api/stream` 都看不到。
+不应发生。委派任务不写本地任务表，但会写运行记录，在途状态也在 runtime 快照里，`/api/runs` 和 `/api/tiles` 都包含它。只有 `/api/stream` 订阅不到委派任务。看不到时先查 `logs/runs/` 下是否有对应 taskId 的记录。
 
 ## 某个 target 的磁贴一直不出现
 
@@ -101,7 +101,7 @@ id 占用保留字 `converse`。`validateTargetsData` 会拒绝整份定义。
 ls -lt "$NOVOARD_DATA_DIR/logs/shortcuts/<target>/" | head
 ```
 
-实际路径以 `GET /api/shortcuts/:id/runs` 返回的 `log` 字段为准，不要硬编码 `$NOVOARD_DATA_DIR`，因为桌面版由壳设置该变量。
+实际路径以 `GET /api/runs/:taskId` 返回的 `run.log` 字段为准，不要硬编码 `$NOVOARD_DATA_DIR`，因为桌面版由壳设置该变量。
 
 看未收尾的轨迹：
 

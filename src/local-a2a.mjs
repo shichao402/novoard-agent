@@ -16,7 +16,7 @@ import { serveConsole } from "./console-ui.mjs";
 import { createUiAccess, isLoopbackHost, uiLoginPage } from "./ui-access.mjs";
 import { readJsonlTail } from "./jsonl.mjs";
 import { pageLogFile } from "./log-page.mjs";
-import { listShortcutRuns, readShortcutRunLines, shortcutLogPath, shortcutRunFile } from "./shortcut-log.mjs";
+import { readShortcutRunLines, shortcutLogPath, shortcutRunFile } from "./shortcut-log.mjs";
 import { listRuns, readRun } from "./run-trace.mjs";
 
 const TERMINAL = new Set(["completed", "failed", "canceled", "rejected"]);
@@ -571,19 +571,6 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       const file = shortcutRunFile(shortcutLogDir, run.target, id);
       const { lines, truncated } = readShortcutRunLines(file);
       return json(res, 200, { ok: true, run, lines, truncated });
-    }
-    const shortcutRuns = url.pathname.match(/^\/api\/shortcuts\/([a-z0-9][a-z0-9-]*)\/runs$/);
-    if (req.method === "GET" && shortcutRuns) {
-      if (!getTargets()[shortcutRuns[1]]) return json(res, 404, { ok: false, reason: "unknown target" });
-      json(res, 200, { ok: true, retentionDays: 30, runs: listShortcutRuns(shortcutLogDir, shortcutRuns[1]) });
-      return;
-    }
-    const shortcutLog = url.pathname.match(/^\/api\/shortcuts\/([a-z0-9][a-z0-9-]*)\/runs\/(task-[A-Za-z0-9-]+)$/);
-    if (req.method === "GET" && shortcutLog) {
-      const file = shortcutRunFile(shortcutLogDir, shortcutLog[1], shortcutLog[2]);
-      if (!file) return json(res, 404, { ok: false, reason: "这次运行没有内部日志" });
-      json(res, 200, { ok: true, log: `shortcuts/${shortcutLog[1]}/${shortcutLog[2]}.jsonl`, ...pageLogFile(file, { page: url.searchParams.get("page") ?? 1 }) });
-      return;
     }
     if (req.method === "GET" && url.pathname === "/api/codebuddy") {
       if (!codebuddy?.read) return json(res, 404, { ok: false, reason: "CodeBuddy 配置未装配" });

@@ -12,8 +12,6 @@
 | `GET` | `/api/runs?target=&limit=` | 运行视图（[ADR-0021](../adr/0021-run-history-from-trace.md)）：`{ live, runs, retentionDays }`，`runs` 按开始时间倒序，`limit` 默认 50、最大 500 |
 | `GET` | `/api/runs/:taskId` | 单次运行：`{ run, lines, truncated }`，`lines` 按时间正序并带 `step` 归属；超过保留期返回 `404` |
 | `POST` | `/api/runs/:taskId/cancel` | 取消运行中或排队中的任务；同源校验，写审计（`via: "console"`）；已结束或等待审批返回 `409` |
-| `GET` | `/api/shortcuts/:id/runs` | 该 target 的输出文件列表（含 `retentionDays: 30`），兼容保留，控制台不再使用 |
-| `GET` | `/api/shortcuts/:id/runs/:taskId` | 单次运行的输出行（分页），兼容保留 |
 
 运行摘要 `run` 的字段：`taskId`、`target`、`title`、`trigger`、`timeout`、`startedAt`、`endedAt`、`state`、`steps[{ index, command, startedAt, endedAt, exit }]`、`failedStep`、`durationMs`、`log`，在途时另有 `live`。`state` 除任务状态枚举外，还可能是展示态 `interrupted`（记录没有 `run/end`、也不在途）。
 

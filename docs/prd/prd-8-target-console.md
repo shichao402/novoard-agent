@@ -91,7 +91,9 @@
 
 摘要字段：`taskId`、`target`、`title`、`trigger`、`startedAt`、`endedAt`、`state`、`steps[{ index, command, startedAt, endedAt, exit }]`、`failedStep`、`log`。在途字段：`state`（working、queued、input-required）、`step`、`total`、`message`、`blockedBy`。
 
-`/api/shortcuts/:id/runs*` 保留兼容，控制台不再使用。
+旧的 `/api/shortcuts/:id/runs` 与 `/api/shortcuts/:id/runs/:taskId` 已删除，单次运行的输出统一走 `/api/runs/:taskId`。
+
+首页「最近执行」同样读 `/api/runs`（在途在前、最近结束在后，最多 8 条），每行点进运行详情；不再读审计事件。`/api/activity` 仍保留，供审计使用。
 
 ## 验收
 

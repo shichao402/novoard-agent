@@ -20,7 +20,7 @@ function createLocalTasks() {
 
 进程重启后这张表就空了。表现是：磁贴回到"尚未运行"，`tasks/get` 对旧 taskId 返回 not found。
 
-历史运行记录并没有丢：`state/shortcuts/<target>/<taskId>.jsonl` 保存了每次运行的输出，保留 30 天（`SHORTCUT_LOG_RETENTION_MS`），`/api/shortcuts/:id/runs` 能列出来。丢的只是"状态"这一层。
+历史运行记录并没有丢：`state/shortcuts/<target>/<taskId>.jsonl` 保存了每次运行的输出，保留 30 天（`SHORTCUT_LOG_RETENTION_MS`），`/api/shortcuts/:id/runs` 能列出来（该接口已随 PRD-8 删除，现由 `/api/runs` 提供）。丢的只是"状态"这一层。
 
 ## Decision
 

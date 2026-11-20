@@ -47,22 +47,6 @@ export function createShortcutRun({ root, targetId, taskId, now = Date.now() }) 
   };
 }
 
-export function listShortcutRuns(root, targetId) {
-  if (!root) return [];
-  const target = safeTarget(targetId);
-  const dir = join(root, target);
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((name) => name.endsWith(".jsonl"))
-    .map((name) => {
-      const taskId = name.slice(0, -".jsonl".length);
-      const file = join(dir, name);
-      const stat = statSync(file);
-      return { taskId, bytes: stat.size, mtime: stat.mtime.toISOString(), log: `shortcuts/${target}/${name}` };
-    })
-    .sort((left, right) => right.mtime.localeCompare(left.mtime));
-}
-
 export function shortcutRunFile(root, targetId, taskId) {
   if (!root || !TARGET_ID.test(targetId) || !TASK_ID.test(taskId)) return null;
   const file = shortcutLogPath(root, targetId, taskId).file;
