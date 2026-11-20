@@ -84,10 +84,12 @@ Target 声明了 \`inputs\`（\`novoard_status\` 里 \`inputs: true\`）时，�
 
 一个 SVN 仓库按分支在本机维持几份工作副本（槽位）。用户只说「开 xxx 分支」，池负责复用、切换、稀疏检出和存档改动。
 
-- 池根是一个目录，里面放 \`pool.toml\`。池工具步骤的 \`cwd\` 一律写池根；没有 pool.toml 时工具报用法错误，先和用户确认池根位置并写好 pool.toml：\`maxSlots\`、\`svnRoot\` 必填；\`defaultTtl\`、\`resident\`（常驻分支数组）、\`[branches] pattern / listFrom（目录数组，如 ["branches"]）/ recentDays\`、\`[aliases]\`、\`[sparse] exclude\`、\`patchRetentionDays\` 可选。\`pattern\` 必须含 \`{name}\`，可带后缀，如 \`branches/{name}/GameCore\` 只检出分支下的 GameCore。
+- 池根是一个目录，里面放 \`pool.toml\`。除 \`capture-sparse\` 外，池工具步骤的 \`cwd\` 一律写池根；没有 pool.toml 时工具报用法错误，先和用户确认池根位置并写好 pool.toml：\`maxSlots\`、\`svnRoot\` 必填；\`defaultTtl\`、\`resident\`（常驻分支数组）、\`[branches] pattern / listFrom（目录数组，如 ["branches"]）/ recentDays\`、\`[aliases]\`、\`[sparse]\`、\`patchRetentionDays\` 可选。\`pattern\` 必须含 \`{name}\`，可带后缀，如 \`branches/{name}/GameCore\` 只检出分支下的 GameCore。
+- 稀疏检出写 \`[sparse]\`：\`root\` 是工作副本根的 depth（\`empty\` / \`files\` / \`immediates\` / \`infinity\`，默认 infinity），\`[sparse.depth]\` 是映射表，键为相对工作副本根的路径，值为 \`exclude\` / \`empty\` / \`files\` / \`immediates\` / \`infinity\`。没列出的目录继承父目录，列出路径的上级目录自动建成空壳。白名单式精简工程写 \`root = "empty"\`，再把要的目录写成 infinity，例如 \`"GameCore" = "infinity"\`、\`"Project" = "empty"\`、\`"Project/Plugins" = "infinity"\`。旧写法 \`exclude = [...]\`（根 infinity、只排除这些目录）仍可用，但不能和 \`root\` / \`[sparse.depth]\` 混写。只写 exclude 会检出近完整工程，用户要精简工程时用映射表。
+- 用户本机已有精简工程要照着复刻时，不要自己猜目录清单：建一个 Target，步骤 \`workingCopyPool/capture-sparse\`，\`with: { path: "<现有工作副本>" }\`，\`cwd\` 不需要是池根，也不需要 pool.toml；跑一次，把运行日志里导出的 \`[sparse]\` 片段给用户确认后写进 pool.toml。该工具只读，不改工作副本。
 - 分支的固定入口是 \`<池根>/branch/<分支>\`。后续步骤的 cwd、projectPath 写成 \`{{poolRoot}}/branch/{{branch}}\`（poolRoot 放在 Target 的 vars 里），不要写 slot-N 槽位目录，槽位会被复用。
 - 查询工具 \`candidates\`（开分支的候选）、\`occupied\`（正在占用的分支）、\`status\`（池状态）只用于 inputs 的 choices，不能当步骤。choices 里也要写 \`cwd\` 指向池根，如 \`{ "uses": "workingCopyPool/candidates", "cwd": "{{poolRoot}}" }\`。
-- 动作工具：\`acquire\`（branch 必填；ttl 如 \`12h\`、\`3d\`、\`forever\`；tag 选填）、\`release\`（只清租约不动文件）、\`refresh\`（常驻分支更新到最新）、\`gc\`（中断恢复、缩容、清过期存档）。
+- 动作工具：\`acquire\`（branch 必填；ttl 如 \`12h\`、\`3d\`、\`forever\`；tag 选填）、\`release\`（只清租约不动文件）、\`refresh\`（常驻分支更新到最新）、\`gc\`（中断恢复、缩容、清过期存档）、\`capture-sparse\`（从现有工作副本导出 \`[sparse]\` 配置，只读）。
 - 池满，或槽位有冲突、svn 锁时，acquire 失败并列出各槽位的分支、标签、租约。原样转告用户，让他决定释放哪个；不要自己删目录或 revert。
 - 切换或回收前，受控文件的改动会存档成 patch 并 revert，存档路径写在运行日志里，告诉用户即可。未纳管文件只记清单、不删除，会留在槽位里带到下一个分支。
 
