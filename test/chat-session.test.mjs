@@ -299,6 +299,20 @@ test("本机会话 skill 名与内容覆盖能力包和定时", async () => {
   }
 });
 
+test("内置 skill 与外部 novoard-manage 共用同一份规则", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { NOVOARD_SKILL } = await import("../src/novoard-skill.mjs");
+  const rules = await import("../src/novoard-skill-rules.mjs");
+  const manage = readFileSync(new URL("../skills/novoard-manage/SKILL.md", import.meta.url), "utf8");
+  for (const [name, fn] of Object.entries(rules)) {
+    if (typeof fn !== "function") continue;
+    assert.ok(NOVOARD_SKILL.includes(fn(rules.MCP_TOOLS)), `内置 skill 应包含 ${name}`);
+    assert.ok(manage.includes(fn(rules.CLI_TOOLS)), `novoard-manage 应包含 ${name}`);
+  }
+  assert.ok(!/novoard_[a-z_]+/.test(manage), "novoard-manage 不应出现内置 MCP 工具名");
+  assert.match(NOVOARD_SKILL, /novoard-manage/);
+});
+
 test("会话桥可以创建、发送并删除", async () => {
   const dir = mkdtempSync(join(tmpdir(), "novoard-bridge-"));
   const worker = join(dir, "fake-worker.mjs");

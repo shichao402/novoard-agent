@@ -78,6 +78,8 @@
 
 本机会话的项目 skill 写在 `src/novoard-skill.mjs`，启动时落到 `<agentHome>/.codebuddy/skills/novoard-agent-ops/`（2026-11-12 起由 `novoard-agent` 改名，旧目录启动时删除）。能力包的删除和 Git 凭据不开放给会话，只在控制台操作。
 
+Target、步骤、定时、运行时输入、工作副本池的规则只写在 `src/novoard-skill-rules.mjs` 一处。内置 skill 用 MCP 工具名渲染它；给 Cursor、With 等编码会话用的外部 skill `novoard-manage` 由 `npm run skill:gen` 用 CLI 子命令名渲染到 `skills/novoard-manage/`，再发布到 Dec 的 `novoard` bundle。`npm test` 会检查生成结果没有过期。内置 skill 遇到需要看项目、设计多步骤的配置时，会建议用户换到编码会话里用 `novoard-manage`。
+
 注意 `novoard_get_settings` 与 `novoard_save_settings` 也存在，分别走 `GET`/`PUT /api/settings`。
 
 ## 本次缺口

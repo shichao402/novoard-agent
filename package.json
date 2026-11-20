@@ -23,7 +23,9 @@
     "contract-gate": "node scripts/check-contract-copy.mjs",
     "contract:gen-types": "node scripts/gen-contract-types.mjs",
     "contract:check-types": "node scripts/gen-contract-types.mjs --check",
-    "test": "npm run version:check && npm run contract-gate && npm run contract:check-types && node --test \"test/*.mjs\""
+    "test": "npm run version:check && npm run contract-gate && npm run contract:check-types && npm run skill:check && node --test \"test/*.mjs\"",
+    "skill:gen": "node scripts/gen-manage-skill.mjs",
+    "skill:check": "node scripts/gen-manage-skill.mjs --check"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
