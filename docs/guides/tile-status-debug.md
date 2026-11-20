@@ -6,15 +6,9 @@
 
 判断依据：打开 `/api/tasks/<taskId>`（或看 SSE 帧）确认真实状态。若返回 `submitted` 或 `working`，而界面显示失败，就是展示层问题。
 
-根因在 `desktop/src/pages/actions-page.tsx` 的三元表达式：
+历史根因：旧的 `desktop/src/pages/actions-page.tsx` 用三元表达式翻译状态，`submitted` 的 `message` 是空串，所以必然落到"失败"。该页面已随 [PRD-8](../prd/prd-8-target-console.md) 删除。
 
-```ts
-const label = state === "working" ? "运行中" : state === "completed" ? "完成" : state === "canceled" ? "已取消" : frame.status?.message || "失败";
-```
-
-`submitted` 的 `message` 是空串（`trigger` 里写死 `{ state: "submitted", message: "" }`），所以必然落到"失败"。
-
-处理：按 [ADR-0005](../adr/0005-single-task-state-enum.md) 改用唯一映射表。
+现在状态翻译只在 `desktop/src/lib/run-state.ts` 一处（[ADR-0005](../adr/0005-single-task-state-enum.md)）。如果再出现这个症状，先查 `run-state.ts` 的映射表是否漏了该状态，再查页面是否绕过它自己拼了文案。
 
 ## 一直是运行中，不结束
 

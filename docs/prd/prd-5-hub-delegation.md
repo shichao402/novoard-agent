@@ -145,7 +145,7 @@ if (running.has(taskId)) return { ok: true, reason: "duplicate-taskId" };
 - 本机不主动连 Hub 拉任务，所有触达都在已建立的连接上。
 - 不做跨重启的任务恢复。sidecar 重启后 Hub 应把未完成的任务重新下发。
 - 不做多 Hub 连接，一个 sidecar 只连一个 Hub。
-- 委派任务不写本地任务表，因此 `/api/tiles` 与 `/api/stream` 都看不到它们。
+- 委派任务不写本地任务表，因此 `/api/stream` 订阅不到它们。历史和在途状态通过运行记录与 runtime 快照提供，可在 `/api/runs` 和 `/api/tiles` 的 `lastRun`/`live` 中看到（[ADR-0021](../adr/0021-run-history-from-trace.md)、[PRD-8](prd-8-target-console.md)）。
 
 ## 依赖
 

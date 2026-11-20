@@ -37,6 +37,7 @@
 | [0006](0006-accept-then-push.md) | 受理即回执，进度与终态靠推送 | Accepted | 2026-10-20 |
 | [0007](0007-progress-channel.md) | 进度通道复用既有 SSE 与上行帧，不新增契约字段 | Accepted | 2026-10-20 |
 | [0011](0011-task-table-in-memory.md) | 任务表只在内存，重启即清 | Accepted | 2026-10-20 |
+| [0021](0021-run-history-from-trace.md) | 运行历史从运行记录派生，不另建存储 | Accepted | 2026-11-20 |
 
 ### 对外与可观测
 

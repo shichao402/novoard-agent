@@ -15,6 +15,7 @@ agent 是"一份源码、多平台产物"的联邦成员，能力面分三层：
 | [PRD-5](prd-5-hub-delegation.md) Hub 委派 | 注册、委派执行、重放 | 人不在也能远程触发 | Hub 契约 |
 | [PRD-6](prd-6-distribution-and-shell.md) 分发与桌面壳 | SEA 打包、轻壳、向导 | 装上就能用 | 多平台 CI |
 | [PRD-7](prd-7-schedule-and-capability-packs.md) 定时调度与能力包 | 本机定时、uses step、包管理、缺包诊断 | 每天的琐事自动做完，缺东西提前知道 | Hub 契约 v2.4；ADR-0019 |
+| [PRD-8](prd-8-target-console.md) Target 控制台与运行视图 | Target 列表、详情、编辑分层；运行详情与全局运行页 | 一处看清每个 target 跑得怎么样、停在哪一步 | ADR-0021 |
 
 ## 共享术语
 

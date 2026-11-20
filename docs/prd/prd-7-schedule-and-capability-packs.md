@@ -21,7 +21,7 @@
 | A7 | 控制台 | A2、A5、A6 | `src/console-ui.mjs` 及前端 |
 | A8 | 契约 v2.5：来源自发现包名、本机 Git 凭据 | A5、A7；Hub H5 | `src/packs/`、`src/local-a2a.mjs`、桌面设置页与能力包页 |
 | A10 | 契约 v2.7：整仓扫描、本机「自动添加」、懒添加 | A8；Hub H6 | 新 `src/packs/repos.mjs`、`manager.mjs`、`main.mjs`、`local-a2a.mjs`、能力包页 |
-| A9 | Target 表单化、保存不丢字段、manifest 展示字段 | A8 | `desktop/src/pages/targets-page.tsx`、`desktop/src/lib/target-draft.mjs`、`cron.mjs` |
+| A9 | Target 表单化、保存不丢字段、manifest 展示字段 | A8 | `desktop/src/pages/target-edit-page.tsx`（原 `targets-page.tsx`，PRD-8 拆分）、`desktop/src/lib/target-draft.mjs`、`cron.mjs` |
 
 ## A1 同步契约 v2.4
 

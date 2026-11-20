@@ -17,7 +17,7 @@ submitted | working | input-required | completed | failed | canceled | rejected
 | `src/local-a2a.mjs:19` | `completed, failed, canceled, rejected` | 本地任务表 |
 | `src/main.mjs` 的 `TERMINAL_STATES_SET` | `completed, failed, canceled, rejected` | 终态钩子 |
 | `src/tunnel-client.mjs` 的 `TERMINAL_OK` | `completed, failed, canceled` | 缺 `rejected`，上行会丢 |
-| `desktop/src/pages/actions-page.tsx` | 只认 `working / completed / canceled` | 其余落到"失败" |
+| `desktop/src/lib/run-state.ts` | 全部枚举 + 展示态 `queued`、`interrupted` | 控制台唯一翻译点（PRD-8，取代已删除的 `actions-page.tsx`） |
 
 `TERMINAL_OK` 缺 `rejected` 意味着：一个被拒绝的任务在本地被判为终态，但 `uplinkTerminal` 会直接 `return`，Hub 永远收不到。这是 [ADR-0005](../adr/0005-single-task-state-enum.md) 要求收敛的直接原因。
 

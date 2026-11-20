@@ -9,8 +9,17 @@
 | `GET` | `/api/tiles` | 磁贴数据：targets + 各 target 最近一次执行 + 最近 20 个任务 |
 | `GET` | `/api/targets/:id/inputs` | 点击时的运行时输入描述：现场调查询工具取候选项、解析默认值（[ADR-0020](../adr/0020-tile-runtime-inputs.md)） |
 | `GET` | `/api/stream/:taskId` | SSE 订阅单任务；先写快照帧，终态后关流 |
-| `GET` | `/api/shortcuts/:id/runs` | 该 target 的运行记录列表（含 `retentionDays: 30`） |
-| `GET` | `/api/shortcuts/:id/runs/:taskId` | 单次运行的输出行 |
+| `GET` | `/api/runs?target=&limit=` | 运行视图（[ADR-0021](../adr/0021-run-history-from-trace.md)）：`{ live, runs, retentionDays }`，`runs` 按开始时间倒序，`limit` 默认 50、最大 500 |
+| `GET` | `/api/runs/:taskId` | 单次运行：`{ run, lines, truncated }`，`lines` 按时间正序并带 `step` 归属；超过保留期返回 `404` |
+| `POST` | `/api/runs/:taskId/cancel` | 取消运行中或排队中的任务；同源校验，写审计（`via: "console"`）；已结束或等待审批返回 `409` |
+| `GET` | `/api/shortcuts/:id/runs` | 该 target 的输出文件列表（含 `retentionDays: 30`），兼容保留，控制台不再使用 |
+| `GET` | `/api/shortcuts/:id/runs/:taskId` | 单次运行的输出行（分页），兼容保留 |
+
+运行摘要 `run` 的字段：`taskId`、`target`、`title`、`trigger`、`timeout`、`startedAt`、`endedAt`、`state`、`steps[{ index, command, startedAt, endedAt, exit }]`、`failedStep`、`durationMs`、`log`，在途时另有 `live`。`state` 除任务状态枚举外，还可能是展示态 `interrupted`（记录没有 `run/end`、也不在途）。
+
+在途快照 `live[]`：`taskId`、`target`、`title`、`state`（`working`、`queued`、`input-required`）、`trigger`、`startedAt`、`step`、`total`、`message`、`blockedBy`。
+
+`/api/tiles` 每项另有 `lastRun`（运行记录里最近一次的摘要，含 Hub 与定时触发）与 `live`（该 target 的在途快照）。`last` 在内存任务表没有或更旧时回落到 `lastRun`。
 
 `/api/tiles` 的真实返回：
 

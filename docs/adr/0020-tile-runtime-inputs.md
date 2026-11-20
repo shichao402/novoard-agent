@@ -145,7 +145,7 @@ toolset.json 的工具可以声明 `"kind": "query"`，缺省为 `"action"`，�
 - 能力描述：`src/card.mjs` 的 `deriveCard`。
 - 装载期预检：实际落在 `src/card.mjs` 的 `validateInputDefs`（inputs 定义）与 `validateUsesSteps`（step 引用查询工具即报错），与 uses 预检同处；未放进 `src/packs/diagnose.mjs`。
 - 取值、last、查询：`src/inputs.mjs`（`resolveInputs`、`createInputMemory`、`createInputService`）；`last` 文件实际位于 `<state>/input-memory.json`。
-- 界面：`desktop/src/components/inputs-dialog.tsx`（选择框，接在 `pages/actions-page.tsx`；首页磁贴无执行按钮，不涉及）、`components/inputs-editor.tsx`（Target 表单编辑 inputs）。
+- 界面：`desktop/src/components/inputs-dialog.tsx`（选择框，由 `components/run-launcher.tsx` 挂到 Target 列表、详情与运行详情页；首页无执行按钮，不涉及）、`components/inputs-editor.tsx`（Target 表单编辑 inputs）。
 - 测试：`test/inputs.test.mjs`、`test/target-form.test.mjs`。
 - 若决策落地，需要同步改的文档：Hub 仓 `schemas/target.json` 与契约说明；本仓 `src/contract/schemas/target.json`、[PRD-2](../prd/prd-2-targets-and-editor.md)（字段表、变量插值一节）、[ADR-0019](0019-capability-pack-protocol.md)（§1 增加 `kind`，§3 增加 `choices`）、`architecture/local-api.md`（新接口）。2026-11-16 已全部同步。
 

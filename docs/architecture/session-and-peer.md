@@ -139,7 +139,7 @@ function watchRun(taskId, skillId) {
 
 设计上应把它理解为"同一任务的多个订阅者"，而不是"两套流程"。这样 `watchRun` 只需要往订阅列表里加一个远端订阅者，运行期的进度广播天然覆盖两边。
 
-注意第二条不写本地任务表：委派任务只在 `agent-runtime` 的 `running` Map 里，不经过 `local-a2a` 的 `tasks`。这意味着 `/api/tiles` 看不到委派任务，`/api/stream` 也订阅不到。这是当前的分工，若要让本地也看到委派任务，需要把两边合并。
+注意第二条不写本地任务表：委派任务只在 `agent-runtime` 的 `running` Map 里，不经过 `local-a2a` 的 `tasks`，因此 `/api/stream` 订阅不到它。但委派任务照样写运行记录，在途状态也在 `runtime.snapshot()` 里，所以本地仍能看到：`/api/runs` 列出它的历史与在途状态，`/api/tiles` 的 `lastRun`/`live` 也包含它（[ADR-0021](../adr/0021-run-history-from-trace.md)）。控制台的运行页、Target 详情都基于这两个接口，不依赖任务表。
 
 ## 一个容易误判的细节
 

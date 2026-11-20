@@ -36,7 +36,7 @@
 
 ### F1 状态文案覆盖全部七态
 
-现状（`desktop/src/pages/actions-page.tsx`）：
+当时的现状（`desktop/src/pages/actions-page.tsx`，已随 PRD-8 删除，状态翻译现在统一在 `desktop/src/lib/run-state.ts`）：
 
 ```ts
 const label =
@@ -97,8 +97,8 @@ const label =
 ## 边界
 
 - 磁贴状态以 target 为单位展示最近一次执行。同一 target 并发运行多个时只显示最新那次。
-- 任务表在内存，sidecar 重启后历史状态丢失，磁贴回到"尚未运行"。见 [ADR-0011](../adr/0011-task-table-in-memory.md)。
-- 委派任务（Hub 下发）不写本地任务表，因此不出现在磁贴上。
+- 任务表在内存（[ADR-0011](../adr/0011-task-table-in-memory.md)），但最近一次结果改从运行记录读取，sidecar 重启后不再回到"尚未运行"（[ADR-0021](../adr/0021-run-history-from-trace.md)）。
+- 委派任务（Hub 下发）不写本地任务表，但会写运行记录，因此会出现在 Target 列表的最近结果和运行页里。磁贴已由 [PRD-8](prd-8-target-console.md) 的 Target 列表取代。
 
 ## 依赖
 

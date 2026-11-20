@@ -102,9 +102,7 @@ docs/
 
 | 位置 | 缺陷 | 详见 |
 | --- | --- | --- |
-| `desktop/src/pages/actions-page.tsx` 状态映射 | 非 `working` 且非终态落到"失败"，`submitted` 必然误报 | ADR-0005、PRD-1 F1 |
-| `desktop/src/pages/actions-page.tsx` 的 `pending` | 由 HTTP 返回驱动，与任务是否结束无关 | PRD-1 F2 |
-| `desktop/src/pages/actions-page.tsx` 的 `last.state` | 直接输出英文枚举 | PRD-1 F1 |
+| `desktop/src/pages/actions-page.tsx`（已随 PRD-8 删除） | 状态映射把非终态落到"失败"、`pending` 由 HTTP 返回驱动、`last.state` 输出英文枚举；现由 `desktop/src/lib/run-state.ts` 统一翻译 | ADR-0005、PRD-1 F1/F2、PRD-8 |
 | `src/local-a2a.mjs` 的 `trigger` | `launch` 失败时改状态但不 `emit`，也不调 `triggerHook` | ADR-0009、PRD-1 F5 |
 | `src/local-a2a.mjs` 的 `tasks/cancel` | 不判断是否已是终态，会把 `completed` 改成 `canceled` | local-api、PRD-1 F6 |
 | `src/local-a2a.mjs` 的 `/api/tiles` | `expose !== "none"` 是恒真判断，schema 里没有 `none` | ADR-0015 |
