@@ -48,7 +48,7 @@ export type QuestionBubble = {
 export type ToolGroupBubble = { id: string; role: "tools"; calls: ToolCall[] };
 export type Bubble = TextBubble | ApprovalBubble | QuestionBubble | ToolGroupBubble;
 
-export type TurnProgress = { startedAt: string; lastAt: string; tool: string };
+export type TurnProgress = { startedAt: string; lastAt: string; tool: string; waiting: "" | "question" | "approval" };
 
 export function mergeLog<T extends LogRow>(log: T[], events: T[] | undefined | null): T[];
 

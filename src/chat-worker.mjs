@@ -18,6 +18,7 @@ import { closeOpenTurns, createSessionStore } from "./session-store.mjs";
 import { explainAgentError, isMissingConversation, normalizeSdkMessage } from "./chat-events.mjs";
 import { dispatchNovoardTool } from "./novoard-tools.mjs";
 import { createAskGate, formatAnswers, normalizeQuestions } from "./ask-user.mjs";
+import { createCardOrder, toolUseIds } from "./card-order.mjs";
 import { cliPermissionMode, createApprovalGate, decideToolUse, describeToolCall, permissionPrompt } from "./chat-approval.mjs";
 import { codebuddySessionFields } from "./codebuddy-config.mjs";
 import { NOVOARD_SKILL, NOVOARD_SKILL_NAME, NOVOARD_SKILL_LEGACY_NAMES } from "./novoard-skill.mjs";
@@ -105,7 +106,7 @@ function sessionOptions(sdk, holder) {
       if (!questions.length) return { behavior: "deny", message: "问题格式不正确，没有可回答的题目。" };
       const questionId = String(options?.toolUseID || `ask-${Date.now()}`);
       const requestId = turns.get(sessionId)?.requestId;
-      publish(sessionId, requestId, { kind: "question", questionId, questions });
+      showCard(sessionId, options?.toolUseID, () => publish(sessionId, requestId, { kind: "question", questionId, questions }));
       let payload;
       try {
         payload = await askGate.wait(questionId, sessionId, questions, options?.signal);
@@ -158,7 +159,7 @@ async function approveTool(sessionId, toolName, input, options, permission) {
   const approvalId = String(options?.toolUseID || `approve-${Date.now()}`);
   const requestId = turns.get(sessionId)?.requestId;
   const call = describeToolCall(toolName, input);
-  publish(sessionId, requestId, { kind: "approval", approvalId, ...call });
+  showCard(sessionId, options?.toolUseID, () => publish(sessionId, requestId, { kind: "approval", approvalId, ...call }));
   let answer;
   try {
     answer = await approvalGate.wait(approvalId, sessionId, toolName, options?.signal);
@@ -171,6 +172,13 @@ async function approveTool(sessionId, toolName, input, options, permission) {
     return { behavior: "deny", message: `用户拒绝了这次 ${toolName} 调用。不要换工具绕过，问他想怎么做。` };
   }
   return allow;
+}
+
+/** 卡片排在引出它的正文之后，见 card-order.mjs。不在轮次里（不该发生）就直接写。 */
+function showCard(sessionId, toolUseId, write) {
+  const cards = turns.get(sessionId)?.cards;
+  if (cards) cards.card(toolUseId ? String(toolUseId) : "", write);
+  else write();
 }
 
 function sessionEnv() {
@@ -283,6 +291,7 @@ async function consume(session, sessionId, turn) {
       publish(sessionId, turn.requestId, event);
       if (event.kind === "assistant" && event.text) touch(sessionId, { preview: event.text.slice(0, 80) });
     }
+    turn.cards.step(toolUseIds(message));
   }
   return { missing };
 }
@@ -415,7 +424,7 @@ async function handle(request) {
     const entry = store.get(sessionId);
     if (!entry) return emit({ id, error: "会话不存在", code: "missing" });
     if (turns.has(sessionId)) return emit({ id, error: "上一轮还没结束。等它结束，或者先点停止。", code: "busy" });
-    const turn = { requestId: id, stopping: false };
+    const turn = { requestId: id, stopping: false, cards: createCardOrder() };
     turns.set(sessionId, turn);
     if (request.peer === true) peerTurns.add(sessionId);
     else peerTurns.delete(sessionId);

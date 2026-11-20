@@ -30,7 +30,11 @@ export function turnRunning(log, fallback = false) {
   return Boolean(fallback);
 }
 
-/** 当前这一轮的进度：开始时间、最后一行的时间、正在跑的工具。没有在跑时返回 null。 */
+/**
+ * 当前这一轮的进度：开始时间、最后一行的时间、正在跑的工具，以及是否在等用户。
+ * waiting：本轮有没答的问答是 "question"，有没批的授权是 "approval"；这时模型停着，不是在想。
+ * 没有在跑时返回 null。
+ */
 export function turnProgress(log, running, fallbackStartedAt) {
   if (!running) return null;
   let startedAt = fallbackStartedAt || "";
@@ -45,18 +49,25 @@ export function turnProgress(log, running, fallbackStartedAt) {
   }
   const last = log[log.length - 1];
   let calls = [];
+  const open = new Map();
   for (let index = start; index < log.length; index += 1) {
     const row = log[index];
     if (row?.kind === "tool" || row?.kind === "tool_result") {
       if (row.kind === "tool" && row.name === "AskUserQuestion") continue;
       calls = applyToolEvent(calls, row);
     }
+    if (row?.kind === "question" && row.questionId) open.set(`q:${row.questionId}`, "question");
+    if (row?.kind === "answer" && row.questionId) open.delete(`q:${row.questionId}`);
+    if (row?.kind === "approval" && row.approvalId) open.set(`a:${row.approvalId}`, "approval");
+    if (row?.kind === "approval_result" && row.approvalId) open.delete(`a:${row.approvalId}`);
   }
   const runningCall = [...calls].reverse().find((call) => call.status === "running");
+  const waiting = [...open.values()].pop() || "";
   return {
     startedAt,
     lastAt: last?.at || startedAt,
     tool: runningCall?.title || "",
+    waiting,
   };
 }
 

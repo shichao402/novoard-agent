@@ -260,11 +260,15 @@ export function ChatPage({ base }: { base: string }) {
     const quiet = seconds(progress.lastAt, now);
     const doing = stopping === active
       ? "正在停止…"
-      : progress.tool
-        ? `正在执行：${progress.tool}`
-        : quiet >= 10
-          ? `模型思考中（${quiet} 秒没有新输出）`
-          : "模型思考中";
+      : progress.waiting === "question"
+        ? "等你回答上面的问题"
+        : progress.waiting === "approval"
+          ? "等你批准上面的工具调用"
+          : progress.tool
+            ? `正在执行：${progress.tool}`
+            : quiet >= 10
+              ? `模型思考中（${quiet} 秒没有新输出）`
+              : "模型思考中";
     progressText = `已进行 ${elapsed} 秒 · ${doing}`;
   }
 

@@ -185,6 +185,28 @@ test("界面记录按 seq 合并去重，是否在跑看最后一条 turn 行", 
   assert.equal(turnProgress(idle, false), null);
 });
 
+test("本轮有没答的问答或没批的授权时，进度标成在等用户", () => {
+  const base = [
+    { kind: "turn", state: "running", seq: 1, at: "2026-11-20T03:36:00.000Z" },
+    { kind: "assistant", text: "三件事一起定一下：", seq: 2 },
+  ];
+  assert.equal(turnProgress(base, true).waiting, "", "没有卡片时不在等");
+  const asked = [...base, { kind: "question", questionId: "q1", questions: [], seq: 3 }];
+  assert.equal(turnProgress(asked, true).waiting, "question");
+  const answered = [...asked, { kind: "answer", questionId: "q1", answers: {}, seq: 4 }];
+  assert.equal(turnProgress(answered, true).waiting, "", "答完就不再等");
+  const approval = [
+    ...base,
+    { kind: "tool", name: "PowerShell", toolUseId: "t1", input: {}, seq: 3 },
+    { kind: "approval", approvalId: "t1", tool: "PowerShell", seq: 4 },
+  ];
+  assert.equal(turnProgress(approval, true).waiting, "approval", "等批准优先于正在执行");
+  const approved = [...approval, { kind: "approval_result", approvalId: "t1", decision: "once", seq: 5 }];
+  assert.equal(turnProgress(approved, true).waiting, "");
+  const earlier = [{ kind: "question", questionId: "old", questions: [], seq: 0 }, ...base];
+  assert.equal(turnProgress(earlier, true).waiting, "", "上一轮遗留的卡片不算");
+});
+
 test("气泡全部由记录推出：id 稳定，停止后问答、授权和工具收尾", () => {
   const rows = [
     { kind: "user", text: "查一下", seq: 1 },
