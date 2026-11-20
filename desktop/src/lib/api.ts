@@ -331,13 +331,6 @@ export function runTarget(base: string, id: string, vars?: Record<string, string
   });
 }
 
-export type ActivityEvent = {
-  ts?: string;
-  target?: string;
-  outcome?: string;
-  taskId?: string;
-};
-
 export type ChatSession = {
   id: string;
   title: string;
@@ -397,10 +390,6 @@ export function getProfile(base: string) {
 
 export function saveProfile(base: string, input: { role: string; introduction: string }) {
   return request<AgentProfile>(base, "/api/profile", { method: "PUT", body: JSON.stringify(input) });
-}
-
-export function getActivity(base: string) {
-  return request<{ ok: boolean; events: ActivityEvent[] }>(base, "/api/activity?limit=30");
 }
 
 export function agentDoctor(base: string) {
@@ -511,21 +500,6 @@ export function getLogs(base: string, page: number, level: string, query: string
   const params = new URLSearchParams({ page: String(page), level, q: query });
   if (pageSize) params.set("pageSize", String(pageSize));
   return request<LogPage & { ok: boolean }>(base, `/api/logs?${params}`);
-}
-
-export type ShortcutRun = {
-  taskId: string;
-  bytes: number;
-  mtime: string;
-  log: string;
-};
-
-export function getShortcutRuns(base: string, id: string) {
-  return request<{ ok: boolean; retentionDays: number; runs: ShortcutRun[] }>(base, `/api/shortcuts/${encodeURIComponent(id)}/runs`);
-}
-
-export function getShortcutLog(base: string, id: string, taskId: string, page = 1) {
-  return request<LogPage & { ok: boolean; log: string }>(base, `/api/shortcuts/${encodeURIComponent(id)}/runs/${encodeURIComponent(taskId)}?page=${page}`);
 }
 
 export type UpdatePhase =
