@@ -13,10 +13,10 @@ export function Switch({
       role="switch"
       aria-checked={checked}
       aria-label={label}
-      className={`relative h-6 w-11 rounded-full transition-colors ${checked ? "bg-accent" : "bg-line-hi"}`}
+      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? "bg-accent" : "bg-line-hi"}`}
       onClick={() => onChange(!checked)}
     >
-      <span className={`absolute top-0.5 size-5 rounded-full bg-white transition-transform ${checked ? "translate-x-5" : "translate-x-0.5"}`} />
+      <span className={`absolute left-0.5 top-0.5 size-5 rounded-full bg-white transition-transform ${checked ? "translate-x-5" : "translate-x-0"}`} />
     </button>
   );
 }
