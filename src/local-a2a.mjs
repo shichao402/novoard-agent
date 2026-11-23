@@ -381,7 +381,7 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
             : traced ? { state: traced.state, status: { message: "" }, updatedAt: traced.endedAt ?? traced.startedAt, log: traced.log } : null;
           const s = byId.get(id);
           return {
-            id, title: t.title ?? id, requiresApproval: t.requiresApproval === true, inputs: hasInputs(t), concurrency: t.concurrency ?? 1, timeout: t.timeout ?? "10m", icon: t.icon ?? "▶",
+            id, title: t.title ?? id, expose: t.expose ?? "a2a", requiresApproval: t.requiresApproval === true, inputs: hasInputs(t), concurrency: t.concurrency ?? 1, timeout: t.timeout ?? "10m", icon: t.icon ?? "▶",
             last: last ? { state: last.state, message: last.status.message, at: last.updatedAt, log: last.log ?? null } : null,
             problems: diagnoseTarget?.(t) ?? [],
             lastRun: traced,

@@ -27,6 +27,8 @@ export type TileProblem = { step: number; uses: string; code: string; level: "er
 export type Tile = {
   id: string;
   title: string;
+  /** a2a：Hub 可见可触发；local：仅本机，Hub 看不到。 */
+  expose?: "a2a" | "local";
   requiresApproval: boolean;
   concurrency?: number;
   timeout?: string;

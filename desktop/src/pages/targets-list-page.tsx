@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock, Play, Plus, RotateCcw, Search, Square } from "lucide-react";
+import { AlertTriangle, Clock, Laptop, Play, Plus, RotateCcw, Search, Square } from "lucide-react";
 import { useMemo, useState } from "react";
 import { liveText, StateDot } from "@/components/run-bits";
 import { RunError, useRunLauncher } from "@/components/run-launcher";
@@ -10,13 +10,14 @@ import { href, navigate, useNow } from "@/lib/router";
 import { durationBetween, formatDuration, formatRelative, isFailure, stateLabel, triggerLabel } from "@/lib/run-state";
 import { formatTime } from "@/lib/utils";
 
-type Filter = "all" | "running" | "failed" | "scheduled" | "problems";
+type Filter = "all" | "running" | "failed" | "scheduled" | "local" | "problems";
 
 const FILTERS: Array<{ id: Filter; label: string }> = [
   { id: "all", label: "全部" },
   { id: "running", label: "运行中" },
   { id: "failed", label: "失败" },
   { id: "scheduled", label: "定时" },
+  { id: "local", label: "仅本机" },
   { id: "problems", label: "有问题" },
 ];
 
@@ -32,6 +33,8 @@ function matches(tile: Tile, filter: Filter) {
       return isFailure(lastState(tile));
     case "scheduled":
       return Boolean(tile.schedule);
+    case "local":
+      return tile.expose === "local";
     case "problems":
       return (tile.problems?.length ?? 0) > 0;
     default:
@@ -161,7 +164,18 @@ export function TargetsListPage({
                 >
                   <StateDot state={state} />
                   <div className="min-w-0">
-                    <div className={`truncate text-sm ${problems.length ? "text-bad" : "text-ink"}`}>{tile.title}</div>
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className={`truncate text-sm ${problems.length ? "text-bad" : "text-ink"}`}>{tile.title}</span>
+                      {tile.expose === "local" ? (
+                        <span
+                          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line-hi px-1.5 py-px text-[10px] leading-4 text-muted"
+                          title="仅本机：Hub 上看不到，也不能从 Hub 触发"
+                        >
+                          <Laptop size={11} />
+                          仅本机
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="truncate font-mono text-[11px] text-faint">{tile.id}</div>
                   </div>
                   <div className="min-w-0 truncate text-xs text-muted">
