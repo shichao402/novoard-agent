@@ -2269,7 +2269,7 @@ dependencies = [
 
 [[package]]
 name = "novoard-agent-desktop"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "chrono",
  "log",
