@@ -4,16 +4,17 @@
  * - resolveInputs：触发受理前统一取值（§4）。传入值优先，其次 default（last 取上次选定值），
  *   必填仍缺值即失败；静态 choices 且不允许自定义时，值必须在列表内。动态候选在这里不复核，交给执行工具。
  * - createInputMemory：last 的存取，文件 <dataDir>/input-memory.json，键 <targetId>.<name>。
- *   只在任务受理成功后写入，失败或取消不覆盖。
+ *   只在任务受理成功后写入，失败或取消不覆盖；频次与时间另存 input-usage.json。
  * - createInputService：给控制台和内置会话用的 describe / queryChoices。
  *   查询工具进程外调用，固定 15 秒超时，不加路径锁、不受 concurrency 约束、不降优先级；
  *   超时、失败、格式非法一律退化为空列表 + 错误原因 + 临时允许自由输入（§3）。
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { prepareInvocation, EXIT } from "./packs/invoke.mjs";
 import { parseUses, toolKind } from "./packs/registry.mjs";
 import { runCommand } from "./packs/exec.mjs";
+import { INPUT_USAGE_LIMIT, rankInputChoices, validInputUsage } from "./input-usage.mjs";
 
 export const QUERY_TIMEOUT_MS = 15_000;
 export const LAST = "last";
@@ -49,15 +50,26 @@ function present(value) {
   return value !== undefined && value !== null;
 }
 
-/** last 的存取。文件读坏了按空处理，不影响触发。 */
-export function createInputMemory({ file } = {}) {
-  function load() {
-    if (!file || !existsSync(file)) return {};
+/** last 与使用历史分开保存；旧 last 文件原样兼容，坏文件不影响触发。 */
+export function createInputMemory({ file, usageFile = file ? join(dirname(file), "input-usage.json") : null, now = Date.now } = {}) {
+  function load(path = file) {
+    if (!path || !existsSync(path)) return {};
     try {
-      const data = JSON.parse(readFileSync(file, "utf8"));
+      const data = JSON.parse(readFileSync(path, "utf8"));
       return data && typeof data === "object" && !Array.isArray(data) ? data : {};
     } catch {
       return {};
+    }
+  }
+
+  function save(path, data) {
+    if (!path) return;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(`${path}.tmp`, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+      renameSync(`${path}.tmp`, path);
+    } catch {
+      try { rmSync(`${path}.tmp`, { force: true }); } catch {}
     }
   }
 
@@ -66,32 +78,43 @@ export function createInputMemory({ file } = {}) {
     return typeof value === "string" ? value : undefined;
   }
 
-  /** 受理成功后调用：把本次 inputs 的取值记下来。 */
+  function getHistory(targetId, name) {
+    const history = validInputUsage(load(usageFile)[`${targetId}.${name}`]);
+    if (history.length) return history;
+    const last = get(targetId, name);
+    // 升级时只知道上次的值，不能编造时间或累计次数。
+    return last ? [{ value: last, count: 1, lastUsedAt: 0 }] : [];
+  }
+
+  /** 受理成功后调用；重复使用同一值也累计，打开弹窗 / 筛选 / 取消不计数。 */
   function remember(targetId, target, vars) {
     const list = inputsOf(target);
     if (!file || list.length === 0) return;
     const data = load();
+    const usages = load(usageFile);
+    const at = now();
     let changed = false;
+    let used = false;
     for (const input of list) {
-      const value = vars?.[input.name];
-      if (!present(value)) continue;
+      const raw = vars?.[input.name];
+      if (!present(raw)) continue;
+      const value = String(raw);
       const key = `${targetId}.${input.name}`;
-      if (data[key] === String(value)) continue;
-      data[key] = String(value);
-      changed = true;
+      let history = validInputUsage(usages[key]);
+      if (!history.length && data[key]) history = [{ value: String(data[key]), count: 1, lastUsedAt: 0 }];
+      if (data[key] !== value) { data[key] = value; changed = true; }
+      if (!value.trim()) continue;
+      const previous = history.find((item) => item.value === value);
+      history = history.filter((item) => item.value !== value);
+      history.push({ value, count: Math.min(Number.MAX_SAFE_INTEGER, (previous?.count ?? 0) + 1), lastUsedAt: at });
+      usages[key] = history.sort((a, b) => b.lastUsedAt - a.lastUsedAt || b.count - a.count).slice(0, INPUT_USAGE_LIMIT);
+      used = true;
     }
-    if (!changed) return;
-    try {
-      mkdirSync(dirname(file), { recursive: true });
-      const tmp = `${file}.tmp`;
-      writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-      renameSync(tmp, file);
-    } catch {
-      try { rmSync(`${file}.tmp`, { force: true }); } catch {}
-    }
+    if (changed) save(file, data);
+    if (used) save(usageFile, usages);
   }
 
-  return { get, remember, file };
+  return { get, getHistory, remember, file, usageFile };
 }
 
 /** default 的解析值：last 无记录时为 undefined。 */
@@ -230,7 +253,7 @@ export function createInputService({ packs = null, memory = null, env = process.
       choices: [],
     };
     if (Array.isArray(input.choices)) {
-      base.choices = input.choices.map((value) => ({ value: String(value) }));
+      base.choices = rankInputChoices(input.choices.map((value) => ({ value: String(value) })), memory?.getHistory?.(targetId, input.name));
       return base;
     }
     if (!input.choices) return base;
@@ -244,7 +267,7 @@ export function createInputService({ packs = null, memory = null, env = process.
       log.warn?.(`[inputs] ${targetId}.${input.name} 候选项查询失败：${res.error}`);
       return { ...base, choices: [], error: res.error, allowCustom: true };
     }
-    return { ...base, choices: res.choices };
+    return { ...base, choices: rankInputChoices(res.choices, memory?.getHistory?.(targetId, input.name)) };
   }
 
   /**

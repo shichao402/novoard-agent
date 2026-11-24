@@ -90,9 +90,9 @@ export type TargetInput = {
   required?: boolean;
 };
 
-export type InputChoice = { value: string; label?: string; hint?: string };
+export type InputChoice = { value: string; label?: string; hint?: string; usage?: { count: number; lastUsedAt: number } };
 
-/** 选择框用的单个输入：候选项已现场查好，default 已解析（last 回显上次值）。 */
+/** 选择框用的单个输入：候选项已现场查好并按使用历史加权，default 已解析（last 回显上次值）。 */
 export type InputDescription = {
   name: string;
   label: string;

@@ -162,6 +162,24 @@ test("查询工具：成功返回候选，cwd 用 vars 插值", async () => {
   }
 });
 
+test("查询工具：动态候选按使用历史加权，保留 label/hint，不重新加入消失的值", async () => {
+  const { registry, cleanup } = fakePack();
+  try {
+    const memory = { getHistory: () => [
+      { value: "release/1.0", count: 3, lastUsedAt: Date.now() },
+      { value: "gone", count: 9, lastUsedAt: Date.now() },
+    ] };
+    const svc = createInputService({ packs: registry, memory, log: quiet });
+    const result = await svc.describe("open", dynTarget("fake/list-ok"));
+    assert.deepEqual(result.inputs[0].choices.map((choice) => choice.value), ["release/1.0", "trunk"]);
+    assert.equal(result.inputs[0].choices[0].usage.count, 3);
+    assert.equal(result.inputs[0].choices[0].label, "1.0");
+    assert.equal(result.inputs[0].choices[0].hint, "/pool");
+  } finally {
+    cleanup();
+  }
+});
+
 test("查询工具：非 0、格式非法、超时、非 query 工具、包未安装都退化为空列表 + 错误 + 允许自由输入", async () => {
   const { registry, cleanup } = fakePack();
   try {
@@ -228,7 +246,8 @@ test("本机触发：/a2a 过 resolveInputs；缺值当场 failed 不启动、�
     assert.equal(described.ok, true);
     const branch = described.inputs.find((i) => i.name === "branch");
     assert.equal(branch.default, "release/1.0", "default: last 回显上次值");
-    assert.deepEqual(branch.choices.map((c) => c.value), ["trunk", "release/1.0"]);
+    assert.deepEqual(branch.choices.map((c) => c.value), ["release/1.0", "trunk"], "最近受理的候选排在前面");
+    assert.equal(branch.choices[0].usage.count, 1);
     assert.equal(described.inputs.find((i) => i.name === "note").required, false);
 
     const missing = await fetch(`http://127.0.0.1:${port}/api/targets/nope/inputs`);

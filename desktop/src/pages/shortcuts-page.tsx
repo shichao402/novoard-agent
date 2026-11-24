@@ -319,7 +319,6 @@ function ShortcutEditor({
                 <div className="text-xs text-muted">输入</div>
                 {inputs.map((input) => {
                   const mode = modes[input.name] ?? "ask";
-                  const listId = `sc-choices-${input.name}`;
                   const fixed = Array.isArray(input.choices) ? input.choices : [];
                   return (
                     <div key={input.name} className="grid grid-cols-[7rem_7.5rem_minmax(0,1fr)] items-center gap-2">
@@ -340,16 +339,22 @@ function ShortcutEditor({
                           />
                           <span className="text-[11px] text-faint">{values[input.name] === "true" ? "开" : "关"}</span>
                         </div>
+                      ) : fixed.length ? (
+                        <Select
+                          aria-label={input.label || input.name}
+                          allowCustom
+                          value={values[input.name] ?? ""}
+                          onChange={(event) => setValues((current) => ({ ...current, [input.name]: event.target.value }))}
+                        >
+                          <option value="">{mode === "ask" ? "弹框初值（可空）" : "请选择"}</option>
+                          {fixed.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
+                        </Select>
                       ) : (
-                        <>
-                          <Input
-                            list={fixed.length ? listId : undefined}
-                            value={values[input.name] ?? ""}
-                            placeholder={mode === "ask" ? "弹框初值（可空）" : "必填"}
-                            onChange={(event) => setValues((current) => ({ ...current, [input.name]: event.target.value }))}
-                          />
-                          {fixed.length ? <datalist id={listId}>{fixed.map((choice) => <option key={choice} value={choice} />)}</datalist> : null}
-                        </>
+                        <Input
+                          value={values[input.name] ?? ""}
+                          placeholder={mode === "ask" ? "弹框初值（可空）" : "必填"}
+                          onChange={(event) => setValues((current) => ({ ...current, [input.name]: event.target.value }))}
+                        />
                       )}
                     </div>
                   );

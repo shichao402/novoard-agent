@@ -21,3 +21,13 @@ cd desktop && npx tauri build
 ```
 
 本地 Node 若缺少 SEA fuse，先把 `NODE_SEA_BASE` 指向官方 Node 发行二进制。
+
+## 下拉交互回归
+
+在仓库根目录运行前端开发服务，打开 `/test/select.html`。该页面使用隔离的假候选与假请求，不会执行真实任务或修改 Agent 设置。
+
+```bash
+npm --prefix desktop run dev -- --host 127.0.0.1 --port 10018 --strictPort
+```
+
+页面自动检查文本筛选、名称和提示匹配、自定义值、原生 change 与表单值、键盘导航、禁用选项、焦点转移，以及参数弹窗不会因选择而误提交或关闭。最后显示通过项数或具体失败原因。单元与接口回归仍由仓库根目录的 `npm test` 执行。

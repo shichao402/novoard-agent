@@ -1,14 +1,19 @@
 import type { ComponentProps, ReactNode } from "react";
+import { SelectLabelContext } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+
+export { Select } from "@/components/ui/select";
 
 export function Field({ label, hint, error, children }: { label: string; hint?: string; error?: string; children: ReactNode }) {
   return (
-    <label className="block">
-      <span className="mb-1.5 block text-xs text-muted">{label}</span>
-      {children}
-      {error ? <span className="mt-1.5 block text-[11px] leading-5 text-bad">{error}</span> : null}
-      {!error && hint ? <span className="mt-1.5 block text-[11px] leading-5 text-faint">{hint}</span> : null}
-    </label>
+    <SelectLabelContext.Provider value={label}>
+      <label className="block">
+        <span className="mb-1.5 block text-xs text-muted">{label}</span>
+        {children}
+        {error ? <span className="mt-1.5 block text-[11px] leading-5 text-bad">{error}</span> : null}
+        {!error && hint ? <span className="mt-1.5 block text-[11px] leading-5 text-faint">{hint}</span> : null}
+      </label>
+    </SelectLabelContext.Provider>
   );
 }
 
@@ -17,18 +22,6 @@ export function Input({ className, ...props }: ComponentProps<"input">) {
     <input
       className={cn(
         "h-9 w-full rounded-lg border border-line-hi bg-surface px-3 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-export function Select({ className, ...props }: ComponentProps<"select">) {
-  return (
-    <select
-      className={cn(
-        "h-9 w-full rounded-lg border border-line-hi bg-surface px-3 text-[13px] text-ink outline-none focus:border-accent",
         className,
       )}
       {...props}
