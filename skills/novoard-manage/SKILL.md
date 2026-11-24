@@ -1,6 +1,6 @@
 ---
 name: novoard-manage
-description: 在编码会话里配置和维护本机 novoard-agent：把项目脚本接成 target（Hub 卡片），用已装能力包编排步骤（如定时 SVN 更新、开分支、打开工程），设定时、装或更新能力包、手动触发、补跑、查执行记录和日志。用户说「把 xxx 脚本接到 novoard」「每天几点帮我做 xxx」「搞个定时跟踪 svn 的任务」「给 novoard 装个包」「跑一下 / 看看 novoard 上 xxx 的结果」时使用。不负责编写业务脚本本身，也不改 Hub 地址、令牌、Git 凭据和定时总开关。
+description: 在编码会话里配置和维护本机 novoard-agent：把项目脚本接成 target（Hub 卡片），用能力包编排步骤，设定时、装或更新能力包、查执行记录和日志；通过具名最小权限 PAT 查询/登记/修改/删除 Hub 能力包来源，主动同步本机来源无需重连。用户说「把脚本接到 novoard」「每天几点做任务」「给 novoard 装包」「登记或修改能力包来源」「同步来源」「看看 novoard 执行结果」时使用。不负责编写业务脚本，不改 Hub 地址、接入令牌、Git 凭据和定时总开关，不自动签发 PAT 或扩大权限。
 ---
 
 <!-- 由 novoard-agent 仓 scripts/gen-manage-skill.mjs 生成，规则源在 src/novoard-skill-rules.mjs。不要直接改这份。 -->
@@ -34,16 +34,44 @@ python3 <skill>/scripts/novoard.py remove <id>
 python3 <skill>/scripts/novoard.py install-pack <installKey> [--update]
 python3 <skill>/scripts/novoard.py trigger <id> [--var 名=值 ...]
 python3 <skill>/scripts/novoard.py catch-up               立即补跑错过的定时
+python3 <skill>/scripts/novoard.py pack-sources list|add|update|remove [选项]
+python3 <skill>/scripts/novoard.py sync-pack-sources      主动同步已配置 Hub 来源，无需重连
 ```
 
 每个子命令都接受 `--dev`，操作开发版 agent（`com.novoard.agent.dev`），默认是正式版（`com.novoard.agent`）。
 
-所有写操作都经 agent 控制台接口完成：保存时校验 schema、备份 `targets.yaml.bak`、热生效并向 Hub
+本机写操作都经 agent 控制台接口完成；来源登记走下述 Hub 专用权限 API。保存时校验 schema、备份 `targets.yaml.bak`、热生效并向 Hub
 上报 `card.update`；执行一律走本机 `/a2a`。不要直接编辑 `agent.json`、`targets.yaml`、`schedule-state.json`，
 改了也不会生效。不要用 Bash 直接跑 target 里的命令或包里的工具来代替 `trigger`，也不要另起系统 cron。
 
 CLI 不提供、本 skill 也不做的事：开关定时总开关、改 Hub 地址或令牌、配 Git 凭据、删除能力包。遇到这些，
 告诉用户去 agent 桌面端设置页操作。密钥不要让用户发进对话。
+
+## 能力包来源管理
+
+来源是 Hub 全局配置，会影响所有成员可安装的软件，不能用本机成员 token 代替管理员授权。用户明确要求登记/修改来源时，编码会话可以直接使用 `pack-sources`，不必自动转到浏览器登录。
+
+凭据由用户在本机一次性准备：Hub 的个人 PAT 明确选择 `pack-sources.read` 和 `pack-sources.manage`。只查清单可仅给 read。只有当前管理员角色具有这些权限，PAT 不因名字叫 admin 就自动提权；降权、禁用、过期或吊销立即拒绝。来源管理权限默认不勾选，也不会自动补到旧 PAT。
+
+CLI 从 `NOVOARD_HUB_PAT_FILE`（用户保存的令牌文本文件）或 `NOVOARD_HUB_PAT` 读取。不要运行 echo/Get-Content 查看明文，不让用户发到对话，不用命令行参数传 token，不从浏览器 Cookie/密码或 agent.json 的 agentToken 偷换身份。缺凭据或 401/403 时停下，让用户准备权限；不自动签发 PAT、换角色、扩大 scope 或改 Git 凭据。
+
+`--hub` 可以指定 Hub HTTPS 根地址；省略时从本机 agent 设置读现有 Hub 地址，不修改设置。HTTPS 重定向不会被跟随，防止 PAT 外传。公开 Git 仓可用 HTTPS；私有仓已验证本机 SSH 权限时优先登记 SSH 地址，不要把 Git token 写进 git URL。
+
+`pack-sources` 支持以下动作（由管理员先完成凭据准备，Windows 用 python）：
+
+`python <skill>/scripts/novoard.py pack-sources list`
+
+`python <skill>/scripts/novoard.py pack-sources add --git git@HOST:GROUP/REPO.git --branch main`
+
+`python <skill>/scripts/novoard.py pack-sources update --key ps-KEY --git git@HOST:GROUP/REPO.git`
+
+`python <skill>/scripts/novoard.py pack-sources remove --key ps-KEY --confirm`
+
+先 list 查已有来源。update 只修改给出的 git/branch，未给字段及已有包名覆盖 id/subdir 原样保留。删除前必须征得用户同意。管理 key 是 `ps-…`，不是本机 `installKey` 或仓库扫描 key `src-…`。重复/冲突返回 409，查清后再决定，不自动删除或整份覆盖来源清单。来源只填仓库和分支，工具不会装包或改定时。
+
+写入后执行 `sync-pack-sources` 主动同步本机，随后 `packs` 查看后台扫描结果，再在用户授权范围内 `install-pack <installKey>`。sync 只访问已配置 Hub，不接受新 Hub/token 参数；未升级的服务返回 404/503，报告缺少版本能力，不要为同步强杀/restart agent。已有 Git HTTPS 来源缺凭据时，根据已验证权限改为 SSH 或请用户在本机设置 Git 凭据，不让用户发送 token。
+
+部署前提：Hub 需支持来源 PAT 和只读成员拉取接口，agent 需支持主动同步接口。CLI 和说明更新不等于线上 Hub/已安装 agent 自动升级；版本未部署时不能宣称来源已接入。内置会话可通过来源同步入口同步，来源写管理仍由带专用 PAT 的编码会话承担。
 
 ## 通用流程
 
@@ -99,7 +127,7 @@ CLI 不提供、本 skill 也不做的事：开关定时总开关、改 Hub 地�
 
 写 uses 步骤：
 
-1. `packs` 看包装没装。没装但来源在列表里，告诉用户要装哪个，同意后 `install-pack <installKey>`。来源也没有，请用户先在 Hub 管理台的「能力包来源」页加上仓库地址（只填仓库和分支，子目录由 agent 自动扫描）。
+1. `packs` 看包装没装。没装但来源在列表里，告诉用户要装哪个，同意后 `install-pack <installKey>`。来源也没有，先用 `sync-pack-sources` 主动同步，别为同步结束 agent 进程。确认 Hub 未登记后，用户授权可用 `pack-sources`（来源专用 PAT） 查询/登记/修改来源；凭据未准备好或 401/403 时请用户在管理台处理，不绕过。只填仓库和分支，子目录由 agent 自动扫描。
 2. `pack-tools <包名>` 拿工具的 params。`with` 的键用参数 name，必填都要给，类型照定义（enum 只取列出的值，列表参数给字符串数组），有 default 的可以不写。不要凭印象编参数。
 3. 工具标了 `platforms` 而本机不在其中，不要用。
 4. 工具标了 `remoteWrite: true`（会提交、推送等写远端），Target 必须 `requiresApproval: true`，并先跟用户讲清会写到哪里。

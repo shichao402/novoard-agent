@@ -14,6 +14,7 @@ import { loadAgentConfig, pinEditionListenPort, pinPanelPort } from "./config.mj
 import { loadTargets, expandSteps, deriveCard, validateUsesSteps } from "./card.mjs";
 import { createPackRegistry } from "./packs/registry.mjs";
 import { createPackManager } from "./packs/manager.mjs";
+import { createHubSourceSync } from "./packs/hub-sync.mjs";
 import { createSourcesCache, packSourcesPath } from "./packs/sources-cache.mjs";
 import { createPackCatalog, createPackRepos, packReposPath } from "./packs/repos.mjs";
 import { createGitAuth, gitCredentialsPath } from "./packs/git-auth.mjs";
@@ -97,6 +98,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, onUpda
     env,
     onChange: ({ id, result }) => refreshCard(`能力包 ${id} ${result.ok ? "已变更" : `操作失败：${result.reason}`}`),
   });
+  const hubSourceSync = createHubSourceSync({ config, sources: packSources, manager: packManager });
   // 已装包目录名与来源包名对齐（旧版人填的 id → toolset.json 的 id）；此时 Card 还没派生，不发通知
   packManager.reconcile({ notify: false });
   const usesErrors = validateUsesSteps(expanded.targets, packs);
@@ -331,6 +333,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, onUpda
       },
     },
     packManager,
+    syncPackSources: () => hubSourceSync.sync(),
     packRegistry: packs,
     gitAuth,
     diagnoseTarget: (target) => diagnoser.diagnoseTarget(target),

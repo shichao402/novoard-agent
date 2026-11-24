@@ -155,6 +155,9 @@ export async function dispatchNovoardTool(name, args, { origin, fetchImpl = glob
       })),
     });
   }
+  if (name === "novoard_sync_pack_sources") {
+    return JSON.stringify(await callJson(fetchImpl, origin, "/api/pack-sources/sync", { method: "POST", body: "{}" }));
+  }
   if (name === "novoard_pack_tools") {
     const body = await callJson(fetchImpl, origin, "/api/packs/tools");
     const packs = input.pack ? (body.packs ?? []).filter((p) => p.id === input.pack) : body.packs ?? [];

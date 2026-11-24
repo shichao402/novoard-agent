@@ -109,7 +109,7 @@ export function handleDesktopCors(req, res) {
   return false;
 }
 
-export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, runTraceDir = null, chat, peer, profile, packManager = null, packRegistry = null, gitAuth = null, diagnoseTarget = null, schedule = null, inputMemory = null, inputService = null, shortcutStore = null } = {}) {
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, runTraceDir = null, chat, peer, profile, packManager = null, syncPackSources = null, packRegistry = null, gitAuth = null, diagnoseTarget = null, schedule = null, inputMemory = null, inputService = null, shortcutStore = null } = {}) {
   const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
@@ -622,6 +622,20 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
     }
     if (req.method === "GET" && url.pathname === "/api/profile") {
       json(res, 200, { ok: true, ...(profile?.read?.() ?? { role: "", introduction: "" }) });
+      return;
+    }
+    // 只刷新已配置 Hub 的来源，不接受调用方传 URL/token，不改变定时或连接。
+    if (url.pathname === "/api/pack-sources/sync" && req.method === "POST") {
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      if (!syncPackSources) return json(res, 503, { ok: false, reason: "来源同步未装配" });
+      readJsonBody(req).then(async (body) => {
+        if (!body.ok || !body.data || typeof body.data !== "object" || Array.isArray(body.data) || Object.keys(body.data).length) {
+          return json(res, 400, { ok: false, reason: "仅接受空 JSON 对象；不能改 Hub 地址或凭据" });
+        }
+        const result = await syncPackSources();
+        audit?.({ lane: "local", target: "pack-sources", outcome: result.ok ? "completed" : "failed", detail: { via: "console", action: "sync", count: result.count ?? null, code: result.code ?? null } });
+        return json(res, result.ok ? 200 : 422, result);
+      }).catch(() => json(res, 500, { ok: false, reason: "来源同步失败，请检查本机日志" }));
       return;
     }
     // 能力包管理（PRD-7 A5）：列出已装与已知来源；安装/更新/删除等操作完成后再返回结果

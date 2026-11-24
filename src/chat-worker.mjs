@@ -228,6 +228,7 @@ function toolDefs(sdk) {
     ["novoard_recent_activity", "读取最近的本机执行审计", {}],
     ["novoard_tail_logs", "读取最近的本机日志", {}],
     ["novoard_list_packs", "列出本机已装能力包和 Hub 下发但还没装的来源（含版本、依赖、凭据状态）", {}],
+    ["novoard_sync_pack_sources", "主动同步已配置 Hub 的能力包来源，无需重连；只读全局清单，不管理来源或改凭据", {}],
     ["novoard_pack_tools", "读取已装能力包的工具清单和参数定义，写 uses 步骤前先查", {
       pack: z.string().optional().describe("只看这个包，省略则返回全部"),
     }],

@@ -105,8 +105,12 @@ export function createSourcesCache({ file, log = console } = {}) {
   function replace(sources) {
     const { next, dropped } = build(sources);
     if (dropped > 0) log.warn?.(`[packs] hub 下发的能力包来源中有 ${dropped} 条不合法或重复，已丢弃`);
+    if (file) {
+      const ordered = [...next.values()].sort((a, b) => a.git.localeCompare(b.git) || (a.subdir ?? "").localeCompare(b.subdir ?? "") || a.branch.localeCompare(b.branch));
+      writeAtomic(file, JSON.stringify({ schemaVersion: 2, sources: ordered.map(({ key: _k, ...s }) => s) }, null, 2) + "\n");
+    }
+    // 只有原子落盘成功后才发布内存快照，失败时保留旧来源。
     cache = next;
-    if (file) writeAtomic(file, JSON.stringify({ schemaVersion: 2, sources: list().map(({ key: _k, ...s }) => s) }, null, 2) + "\n");
     return { count: next.size, dropped };
   }
 

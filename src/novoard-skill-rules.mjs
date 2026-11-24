@@ -15,6 +15,8 @@ export const MCP_TOOLS = {
   packs: "`novoard_list_packs`",
   installPack: "`novoard_install_pack`（key 用返回的 installKey）",
   packTools: "`novoard_pack_tools`",
+  syncSources: "`novoard_sync_pack_sources`",
+  sourceManage: "外部编码会话的 `novoard-manage` CLI（需来源专用 PAT；本机会话不借成员 token 管理来源）",
   schedule: "`novoard_get_schedule`",
   catchUp: "`novoard_schedule_catch_up`",
   inputs: "`novoard_target_inputs`",
@@ -29,6 +31,8 @@ export const CLI_TOOLS = {
   packs: "`packs`",
   installPack: "`install-pack <installKey>`",
   packTools: "`pack-tools <包名>`",
+  syncSources: "`sync-pack-sources`",
+  sourceManage: "`pack-sources`（来源专用 PAT）",
   schedule: "`schedule`",
   catchUp: "`catch-up`",
   inputs: "`inputs <id>`",
@@ -57,7 +61,7 @@ export function stepRules(t) {
 
 写 uses 步骤：
 
-1. ${t.packs} 看包装没装。没装但来源在列表里，告诉用户要装哪个，同意后 ${t.installPack}。来源也没有，请用户先在 Hub 管理台的「能力包来源」页加上仓库地址（只填仓库和分支，子目录由 agent 自动扫描）。
+1. ${t.packs} 看包装没装。没装但来源在列表里，告诉用户要装哪个，同意后 ${t.installPack}。来源也没有，先用 ${t.syncSources} 主动同步，别为同步结束 agent 进程。确认 Hub 未登记后，用户授权可用 ${t.sourceManage} 查询/登记/修改来源；凭据未准备好或 401/403 时请用户在管理台处理，不绕过。只填仓库和分支，子目录由 agent 自动扫描。
 2. ${t.packTools} 拿工具的 params。\`with\` 的键用参数 name，必填都要给，类型照定义（enum 只取列出的值，列表参数给字符串数组），有 default 的可以不写。不要凭印象编参数。
 3. 工具标了 \`platforms\` 而本机不在其中，不要用。
 4. 工具标了 \`remoteWrite: true\`（会提交、推送等写远端），Target 必须 \`requiresApproval: true\`，并先跟用户讲清会写到哪里。

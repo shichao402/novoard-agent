@@ -25,6 +25,7 @@ export const NOVOARD_MCP_TOOLS = [
   "novoard_recent_activity",
   "novoard_tail_logs",
   "novoard_list_packs",
+  "novoard_sync_pack_sources",
   "novoard_pack_tools",
   "novoard_install_pack",
   "novoard_get_schedule",

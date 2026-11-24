@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """在编码会话里操作本机 novoard-agent（只用标准库）。
 
-所有写操作都走 agent 控制台接口：保存 target 走 PUT /api/targets（校验 schema、备份、热替换、
-向 Hub 上报 card.update），执行走本机 /a2a。这里不碰 targets.yaml 等文件，直接改文件不会生效。
+本机写操作走 agent 控制台接口：保存 target 走 PUT /api/targets（校验 schema、备份、热替换、
+向 Hub 上报 card.update），执行走本机 /a2a。来源管理走 Hub 专用 PAT 接口，不借成员令牌授权。
+这里不碰 targets.yaml 等文件，直接改文件不会生效。
 
   看现场
     novoard.py status                      身份、Hub 连接、定时总开关、每个 target 的定时与上次结果
@@ -18,6 +19,8 @@
     novoard.py add --file <片段.yaml> [--replace]   追加或替换一个 target，片段顶层只有一个 id
     novoard.py remove <id>                          撤下一个 target
     novoard.py install-pack <key> [--update]        安装（key 用 packs 返回的 installKey）或更新能力包
+    novoard.py pack-sources list|add|update|remove  管理 Hub 来源，需来源专用 PAT
+    novoard.py sync-pack-sources                   主动同步已配置 Hub 来源，无需重连
 
   执行
     novoard.py trigger <id> [--var k=v ...]   经本机 /a2a 触发一次
@@ -339,6 +342,126 @@ def cmd_log(a) -> int:
     return 0
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _hub_base(a) -> str:
+    value = a.hub or os.environ.get("NOVOARD_HUB_URL", "")
+    if not value:
+        settings = api(locate(a.dev), "GET", "/api/settings", what="读取 Hub 地址")
+        value = settings.get("hubUrl", "")
+    try:
+        url = urllib.parse.urlsplit(value)
+        scheme = {"wss": "https", "ws": "http"}.get(url.scheme, url.scheme)
+        if scheme not in ("https", "http") or not url.hostname or url.username or url.password or url.query or url.fragment:
+            raise ValueError()
+        if scheme == "http" and url.hostname not in ("localhost", "127.0.0.1", "::1"):
+            raise ValueError()
+        if url.path.rstrip("/") not in ("", "/tunnel"):
+            raise ValueError()
+        return urllib.parse.urlunsplit((scheme, url.netloc, "", "", ""))
+    except ValueError:
+        raise Fail("Hub 地址必须是 HTTPS/WSS 根地址（或 /tunnel），不得含凭据/查询参数；HTTP 仅限回环调试")
+
+
+def _hub_pat() -> str:
+    file = os.environ.get("NOVOARD_HUB_PAT_FILE", "")
+    try:
+        token = Path(file).read_text(encoding="utf-8-sig").strip() if file else os.environ.get("NOVOARD_HUB_PAT", "").strip()
+    except (OSError, UnicodeError):
+        raise Fail("无法读取 NOVOARD_HUB_PAT_FILE；请由用户在本机准备凭据，不发送到对话")
+    if not re.fullmatch(r"nvp_[0-9a-f]{16}_[A-Za-z0-9_-]{40,}", token):
+        raise Fail("需要具名 Hub PAT：由用户准备 NOVOARD_HUB_PAT 或 NOVOARD_HUB_PAT_FILE，勿发送明文；不能复用 agentToken")
+    return token
+
+
+def _hub_api(base: str, token: str, method: str, path: str, body=None):
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(base + path, data=data, method=method,
+                                 headers={"Authorization": "Bearer " + token, "Accept": "application/json", "Content-Type": "application/json"})
+    opener = urllib.request.build_opener(_NoRedirect())
+    try:
+        with opener.open(req, timeout=30) as response:
+            raw = response.read(512 * 1024 + 1)
+            if len(raw) > 512 * 1024 or "application/json" not in response.headers.get("Content-Type", ""):
+                raise Fail("Hub 返回非 JSON 或超大响应，停止处理")
+            result = json.loads(raw.replace(token.encode("utf-8"), b"[REDACTED]"))
+            if not isinstance(result, dict):
+                raise Fail("Hub 返回无效对象，停止处理")
+            if method == "GET" and (not isinstance(result.get("sources"), list) or any(not isinstance(s, dict) for s in result["sources"])):
+                raise Fail("Hub 返回无效来源清单，停止处理")
+            return result
+    except urllib.error.HTTPError as error:
+        # 不回显不可信服务器正文，也不跟随重定向携带 PAT。
+        hints = {401: "PAT 无效、过期或已吊销", 403: "缺少来源专用 scope 或用户已降权", 404: "来源不存在或 Hub 尚未升级", 409: "来源或覆盖名冲突，请先查询现有条目"}
+        raise Fail(f"Hub 来源接口被拒绝（HTTP {error.code}）：{hints.get(error.code, '请求失败；不会重定向或自动扩大权限')}")
+    except (urllib.error.URLError, OSError, ValueError):
+        raise Fail("Hub 来源请求失败，请检查网络和服务版本；不会输出 PAT 或自动重试写入")
+
+
+def _source_git(value: str) -> str:
+    value = value.strip()
+    if not value or len(value) > 512 or re.search(r"[\x00-\x20\x7f]", value) or value.startswith("-"):
+        raise Fail("仓库地址不合法")
+    if "://" in value:
+        try:
+            url = urllib.parse.urlsplit(value)
+            if not url.hostname:
+                raise ValueError()
+        except ValueError:
+            raise Fail("仓库 URL 不合法")
+        if url.password or url.query or url.fragment or (url.scheme in ("http", "https") and url.username):
+            raise Fail("来源不得嵌入凭据或查询参数；私有仓有本机 SSH 权限时优先用 SSH")
+    return value
+
+
+def cmd_pack_sources(a) -> int:
+    # 参数先校验，错误请求不读取凭据、不访问服务。
+    if a.action == "list" and (a.key or a.git or a.branch):
+        raise Fail("list 不接受 --key/--git/--branch")
+    if a.action == "add" and (not a.git or a.key):
+        raise Fail("add 需要 --git，不能给 --key")
+    if a.action in ("update", "remove") and (not a.key or not re.fullmatch(r"ps-[0-9a-f]{8,32}", a.key)):
+        raise Fail("update/remove 需要从 list 获取合法的 --key（ps-…）")
+    if a.action == "remove" and (a.git or a.branch or not a.confirm):
+        raise Fail("remove 需要 --confirm，不能给 --git/--branch；先确认用户同意删除")
+    if a.action == "update" and not (a.git or a.branch):
+        raise Fail("update 至少给 --git 或 --branch，未指定字段原样保留")
+    git = _source_git(a.git) if a.git else None
+    if a.branch is not None and (not a.branch.strip() or re.search(r"[\s\x00-\x1f\x7f]", a.branch) or a.branch.startswith("-") or len(a.branch) > 512):
+        raise Fail("branch 不合法")
+    base, token = _hub_base(a), _hub_pat()
+    if a.action == "list":
+        out(_hub_api(base, token, "GET", "/api/pack-sources"))
+        return 0
+    if a.action == "add":
+        result = _hub_api(base, token, "POST", "/api/pack-sources", {"git": git, "branch": a.branch or "main"})
+    elif a.action == "remove":
+        result = _hub_api(base, token, "DELETE", "/api/pack-sources/" + a.key)
+    else:
+        listed = _hub_api(base, token, "GET", "/api/pack-sources")
+        current = next((s for s in listed.get("sources", []) if s.get("key") == a.key), None)
+        if not current:
+            raise Fail("来源不存在，请重新 list；未执行写入")
+        body = {field: current[field] for field in ("git", "branch", "id", "subdir") if field in current}
+        if git:
+            body["git"] = git
+        if a.branch:
+            body["branch"] = a.branch
+        result = _hub_api(base, token, "PUT", "/api/pack-sources/" + a.key, body)
+    out(result)
+    print("来源是 Hub 全局配置；写入后用 sync-pack-sources 同步本机，再 packs 查看扫描结果。", file=sys.stderr)
+    return 0
+
+
+def cmd_sync_pack_sources(a) -> int:
+    info = locate(a.dev)
+    out(api(info, "POST", "/api/pack-sources/sync", {}, timeout=45, what="同步已配置 Hub 的能力包来源"))
+    return 0
+
+
 # ---------- 改配置 ----------
 
 def cmd_add(a) -> int:
@@ -440,6 +563,7 @@ COMMANDS = {
     "pack-tools": cmd_pack_tools, "inputs": cmd_inputs, "activity": cmd_activity, "log": cmd_log,
     "add": cmd_add, "remove": cmd_remove, "install-pack": cmd_install_pack,
     "trigger": cmd_trigger, "catch-up": cmd_catch_up,
+    "pack-sources": cmd_pack_sources, "sync-pack-sources": cmd_sync_pack_sources,
 }
 
 
@@ -450,6 +574,13 @@ def main(argv: list[str]) -> int:
     for name in COMMANDS:
         s = sub.add_parser(name)
         s.add_argument("--dev", action="store_true", help="操作开发版 agent（默认正式版）")
+        if name == "pack-sources":
+            s.add_argument("action", choices=["list", "add", "update", "remove"])
+            s.add_argument("--hub", help="Hub HTTPS 地址；省略时从本机设置读取，不修改设置")
+            s.add_argument("--key", help="Hub list 返回的管理 key（ps-…），不是 installKey")
+            s.add_argument("--git", help="仓库地址，不得嵌入凭据")
+            s.add_argument("--branch", help="分支，新增默认 main；修改时不传则保留")
+            s.add_argument("--confirm", action="store_true", help="明确确认删除全局来源")
         if name == "targets":
             s.add_argument("id", nargs="?")
         if name == "pack-tools":
