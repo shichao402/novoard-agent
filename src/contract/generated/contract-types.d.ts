@@ -225,14 +225,17 @@ export type TargetDefStepScript = {
   "env"?: {
     [key: string]: string;
   };
+  "when"?: TargetDefWhen;
 };
 
 export type TargetDefStepOpenApp = {
   "openApp": string;
+  "when"?: TargetDefWhen;
 };
 
 export type TargetDefStepOpenPath = {
   "openPath": string;
+  "when"?: TargetDefWhen;
 };
 
 export type TargetDefStepTemplate = {
@@ -249,7 +252,11 @@ export type TargetDefStepUses = {
   "cwd"?: string;
   "retry"?: number;
   "retryInterval"?: string;
+  "when"?: TargetDefWhen;
 };
+
+/** 执行条件（契约 v2.9）：插值后为空串、false、0、no、off（不分大小写、忽略首尾空白）时跳过这一步，记为 skipped，不算失败；其余值照常执行。不支持表达式 */
+export type TargetDefWhen = string;
 
 /** A2A task 对象（字面对齐 A2A spec，契约 §5.2） */
 export type Task = {

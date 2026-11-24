@@ -108,11 +108,11 @@ export type InputDescription = {
 export type ScheduleInfo = { enabled: boolean; timezone: string };
 
 export type TargetStep =
-  | { script: string; cwd?: string; env?: Record<string, string> }
-  | { openApp: string }
-  | { openPath: string }
+  | { script: string; cwd?: string; env?: Record<string, string>; when?: string }
+  | { openApp: string; when?: string }
+  | { openPath: string; when?: string }
   | { template: string }
-  | { uses: string; with?: Record<string, string | number | boolean | string[]>; cwd?: string; retry?: number; retryInterval?: string };
+  | { uses: string; with?: Record<string, string | number | boolean | string[]>; cwd?: string; retry?: number; retryInterval?: string; when?: string };
 
 export type TargetDef = {
   title: string;
@@ -314,8 +314,30 @@ export function packAction(base: string, id: string, action: "install" | "update
     : request<{ ok: boolean; reason?: string; version?: string | null; patch?: string }>(base, `/api/packs/${encodeURIComponent(id)}/${action}`, { method: "POST", body: "{}" });
 }
 
-export function getTargetInputs(base: string, id: string) {
-  return request<{ ok: boolean; id: string; title: string; inputs: InputDescription[] }>(base, `/api/targets/${encodeURIComponent(id)}/inputs`);
+/** vars：快捷预设的变量覆盖，候选查询按覆盖后的值插值（ADR-0023）。 */
+export function getTargetInputs(base: string, id: string, vars?: Record<string, string>) {
+  const query = vars && Object.keys(vars).length > 0 ? `?vars=${encodeURIComponent(JSON.stringify(vars))}` : "";
+  return request<{ ok: boolean; id: string; title: string; inputs: InputDescription[] }>(base, `/api/targets/${encodeURIComponent(id)}/inputs${query}`);
+}
+
+/** 快捷预设（ADR-0023）：target + 预填参数 + 点击时仍要询问的输入。只存本机。 */
+export type Shortcut = {
+  id: string;
+  label: string;
+  target: string;
+  vars: Record<string, string>;
+  ask: string[];
+  note?: string;
+};
+
+export type ShortcutsBody = { ok: boolean; shortcuts: Shortcut[]; problems: Record<string, string[]> };
+
+export function getShortcuts(base: string) {
+  return request<ShortcutsBody>(base, "/api/shortcuts");
+}
+
+export function saveShortcuts(base: string, shortcuts: Shortcut[]) {
+  return request<ShortcutsBody>(base, "/api/shortcuts", { method: "PUT", body: JSON.stringify({ shortcuts }) });
 }
 
 /** vars 为运行时输入的取值，作为 data part 传给本机 A2A。 */

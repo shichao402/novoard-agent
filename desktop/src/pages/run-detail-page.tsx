@@ -5,7 +5,7 @@ import { RunError, useRunLauncher } from "@/components/run-launcher";
 import { Button } from "@/components/ui/button";
 import { getRun, type RunLine, type RunSummary, type Tile } from "@/lib/api";
 import { href, navigate, useNow } from "@/lib/router";
-import { durationBetween, formatDuration, isLive, parseProgress, stepState, triggerLabel } from "@/lib/run-state";
+import { durationBetween, formatDuration, isLive, parseProgress, parseSkip, stepState, triggerLabel } from "@/lib/run-state";
 import { formatTime } from "@/lib/utils";
 
 type Group = { key: string; label: string; index: number | null; lines: RunLine[] };
@@ -13,8 +13,11 @@ type Group = { key: string; label: string; index: number | null; lines: RunLine[
 /** 日志按步归属（ADR-0021）：有 step 字段按字段，老日志按步骤起止时间切；进度行单独抽出。 */
 function groupLines(run: RunSummary, lines: RunLine[]) {
   const progress = new Map<number, string>();
+  const skipped = new Map<number, string>();
   const output: RunLine[] = [];
   for (const line of lines) {
+    const skip = parseSkip(line.msg);
+    if (skip) skipped.set(skip.step, skip.command);
     const hit = parseProgress(line.msg);
     if (hit) progress.set(hit.step, hit.text);
     else output.push(line);
@@ -36,7 +39,7 @@ function groupLines(run: RunSummary, lines: RunLine[]) {
     else if (firstStart === null || !line.ts || Date.parse(line.ts) < firstStart) head.push(line);
     else tail.push(line);
   }
-  return { progress, steps, head, tail };
+  return { progress, skipped, steps, head, tail };
 }
 
 export function RunDetailPage({ base, taskId, tiles, onChanged }: { base: string; taskId: string; tiles: Tile[]; onChanged: () => void }) {
@@ -96,12 +99,12 @@ export function RunDetailPage({ base, taskId, tiles, onChanged }: { base: string
 
   const tile = tiles.find((item) => item.id === run.target);
   const current = run.live?.state === "working" ? run.live.step ?? null : null;
-  const total = Math.max(run.live?.total ?? 0, run.steps.length, ...run.steps.map((step) => step.index));
+  const total = Math.max(run.live?.total ?? 0, run.steps.length, ...run.steps.map((step) => step.index), ...grouped.skipped.keys());
   const groups: Group[] = [];
   if (grouped.head.length) groups.push({ key: "head", label: "开始", index: null, lines: grouped.head });
   for (let index = 1; index <= total; index += 1) {
     const step = run.steps.find((item) => item.index === index);
-    groups.push({ key: `s${index}`, label: step?.command ?? `第 ${index} 步`, index, lines: grouped.steps.get(index) ?? [] });
+    groups.push({ key: `s${index}`, label: step?.command ?? grouped.skipped.get(index) ?? `第 ${index} 步`, index, lines: grouped.steps.get(index) ?? [] });
   }
   for (const [index, stepLines] of grouped.steps) {
     if (index > total) groups.push({ key: `s${index}`, label: `第 ${index} 步`, index, lines: stepLines });
@@ -180,7 +183,13 @@ export function RunDetailPage({ base, taskId, tiles, onChanged }: { base: string
         <ul className="divide-y divide-line">
           {groups.map((group) => {
             const step = group.index ? run.steps.find((item) => item.index === group.index) : undefined;
-            const state = group.index === null ? null : group.index === current ? "working" : stepState(step, run.state);
+            const state = group.index === null
+              ? null
+              : group.index === current
+                ? "working"
+                : !step && grouped.skipped.has(group.index)
+                  ? "skipped"
+                  : stepState(step, run.state);
             const open = isOpen(group);
             const progress = group.index ? grouped.progress.get(group.index) : undefined;
             const following = group.index !== null && group.index === current;

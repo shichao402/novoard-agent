@@ -29,6 +29,8 @@
 | [0008](0008-step-level-progress.md) | 进度以 step 为单位，开始与结束各发一次 | Accepted | 2026-10-20 |
 | [0019](0019-capability-pack-protocol.md) | 能力包协议：进程外调用，沿用 cronkit toolset schemaVersion 1 | Accepted | 2026-11-09 |
 | [0020](0020-tile-runtime-inputs.md) | 磁贴运行时输入：点击时选参数，候选项由能力包提供 | Accepted | 2026-11-16 |
+| [0023](0023-shortcut-presets.md) | 快捷预设：Target 加预填参数的界面层，不新增执行单元 | Accepted | 2026-11-24 |
+| [0024](0024-step-when.md) | 步骤级 when：插值后真假决定跑不跑，不引入表达式 | Accepted | 2026-11-24 |
 
 ### 状态与通道
 

@@ -7,14 +7,22 @@ import { href } from "@/lib/router";
 export type Launchable = { id: string; title: string; requiresApproval?: boolean; inputs?: boolean };
 
 /**
+ * 快捷预设带来的参数（ADR-0023）：preset 直接作为触发 vars；ask 是仍要弹框询问的输入。
+ * 不传时按 target 本身：有 inputs 就全部询问。
+ */
+export type LaunchOptions = { preset?: Record<string, string>; ask?: string[] };
+
+type Pending = { target: Launchable; preset: Record<string, string>; only?: string[] };
+
+/**
  * 触发一次运行：带输入的先弹输入框，需审批的先确认（PRD-8 T1）。
  * 返回 launch / cancel 与需要挂在页面里的对话框。
  */
 export function useRunLauncher(base: string, options: { onStarted?: (taskId: string, target: Launchable) => void; onChanged?: () => void } = {}) {
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [ask, setAsk] = useState<Launchable | null>(null);
-  const [confirm, setConfirm] = useState<Launchable | null>(null);
+  const [ask, setAsk] = useState<Pending | null>(null);
+  const [confirm, setConfirm] = useState<Pending | null>(null);
   const [canceling, setCanceling] = useState<string | null>(null);
 
   async function run(target: Launchable, vars?: Record<string, string>) {
@@ -35,10 +43,13 @@ export function useRunLauncher(base: string, options: { onStarted?: (taskId: str
     }
   }
 
-  function launch(target: Launchable) {
-    if (target.inputs) setAsk(target);
-    else if (target.requiresApproval) setConfirm(target);
-    else void run(target);
+  function launch(target: Launchable, launchOptions?: LaunchOptions) {
+    const preset = launchOptions?.preset ?? {};
+    const only = launchOptions ? launchOptions.ask ?? [] : undefined;
+    const needsAsk = only ? only.length > 0 : target.inputs === true;
+    if (needsAsk) setAsk({ target, preset, only });
+    else if (target.requiresApproval) setConfirm({ target, preset });
+    else void run(target, preset);
   }
 
   async function cancel(taskId: string) {
@@ -58,24 +69,26 @@ export function useRunLauncher(base: string, options: { onStarted?: (taskId: str
     <>
       <InputsDialog
         base={base}
-        target={ask}
+        target={ask?.target ?? null}
+        only={ask?.only}
+        preset={ask?.preset}
         onClose={() => setAsk(null)}
         onSubmit={(vars) => {
-          const target = ask;
+          const current = ask;
           setAsk(null);
-          if (target) void run(target, vars);
+          if (current) void run(current.target, { ...current.preset, ...vars });
         }}
       />
       <ConfirmDialog
         open={confirm !== null}
-        title={`执行 ${confirm?.title ?? ""}`}
+        title={`执行 ${confirm?.target.title ?? ""}`}
         body="这个 Target 需要确认后才执行。"
         confirmLabel="执行"
         onClose={() => setConfirm(null)}
         onConfirm={() => {
-          const target = confirm;
+          const current = confirm;
           setConfirm(null);
-          if (target) void run(target);
+          if (current) void run(current.target, current.preset);
         }}
       />
     </>

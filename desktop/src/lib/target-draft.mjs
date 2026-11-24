@@ -27,12 +27,12 @@ function stepKey() {
 export function newStep(kind) {
   switch (kind) {
     case "uses":
-      return { key: stepKey(), kind, uses: "", with: {}, cwd: "", retry: "", retryInterval: "" };
+      return { key: stepKey(), kind, uses: "", with: {}, cwd: "", retry: "", retryInterval: "", when: "" };
     case "script":
-      return { key: stepKey(), kind, script: "", cwd: "" };
+      return { key: stepKey(), kind, script: "", cwd: "", when: "" };
     case "openApp":
     case "openPath":
-      return { key: stepKey(), kind, value: "" };
+      return { key: stepKey(), kind, value: "", when: "" };
     default:
       throw new Error(`不能新建 ${kind} 步骤`);
   }
@@ -48,13 +48,14 @@ function stepToDraft(step) {
       cwd: step.cwd ?? "",
       retry: step.retry === undefined ? "" : String(step.retry),
       retryInterval: step.retryInterval ?? "",
+      when: step.when ?? "",
     };
   }
   if ("script" in step) {
-    return { key: stepKey(), kind: "script", script: step.script, cwd: step.cwd ?? "", ...(step.env ? { env: { ...step.env } } : {}) };
+    return { key: stepKey(), kind: "script", script: step.script, cwd: step.cwd ?? "", when: step.when ?? "", ...(step.env ? { env: { ...step.env } } : {}) };
   }
-  if ("openApp" in step) return { key: stepKey(), kind: "openApp", value: step.openApp };
-  if ("openPath" in step) return { key: stepKey(), kind: "openPath", value: step.openPath };
+  if ("openApp" in step) return { key: stepKey(), kind: "openApp", value: step.openApp, when: step.when ?? "" };
+  if ("openPath" in step) return { key: stepKey(), kind: "openPath", value: step.openPath, when: step.when ?? "" };
   return { key: stepKey(), kind: "template", template: step.template };
 }
 
@@ -206,6 +207,12 @@ export function retiredParams(withValues, tool) {
   return RETIRED_PARAMS.filter((name) => !declared.has(name) && Object.prototype.hasOwnProperty.call(withValues ?? {}, name));
 }
 
+/** 鎵ц鏉′欢锛堝绾?v2.9锛孉DR-0024锛夛細娌″～灏变笉鍐欙紝妯℃澘姝ラ娌℃湁銆?*/
+function whenOf(step) {
+  const when = String(step.when ?? "").trim();
+  return when ? { when } : {};
+}
+
 function stepToDef(step, tools) {
   switch (step.kind) {
     case "uses": {
@@ -217,14 +224,15 @@ function stepToDef(step, tools) {
         ...(step.cwd.trim() ? { cwd: step.cwd.trim() } : {}),
         ...(String(step.retry).trim() !== "" ? { retry: Number(step.retry) } : {}),
         ...(step.retryInterval.trim() ? { retryInterval: step.retryInterval.trim() } : {}),
+        ...whenOf(step),
       };
     }
     case "script":
-      return { script: step.script.trim(), ...(step.cwd.trim() ? { cwd: step.cwd.trim() } : {}), ...(step.env ? { env: step.env } : {}) };
+      return { script: step.script.trim(), ...(step.cwd.trim() ? { cwd: step.cwd.trim() } : {}), ...(step.env ? { env: step.env } : {}), ...whenOf(step) };
     case "openApp":
-      return { openApp: step.value.trim() };
+      return { openApp: step.value.trim(), ...whenOf(step) };
     case "openPath":
-      return { openPath: step.value.trim() };
+      return { openPath: step.value.trim(), ...whenOf(step) };
     default:
       return { template: step.template };
   }

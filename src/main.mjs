@@ -5,6 +5,7 @@
  * 本地审计：agent 侧一份 JSONL（契约 §6 落两侧各一份），与 hub 可对账。
  */
 import { createInputMemory, createInputService } from "./inputs.mjs";
+import { createShortcutStore } from "./shortcuts.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -114,6 +115,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, onUpda
   // 磁贴运行时输入（ADR-0020）：last 记在 <dataDir>/input-memory.json；查询工具进程外调用，15 秒超时
   const inputMemory = createInputMemory({ file: join(state, "input-memory.json") });
   const inputService = createInputService({ packs, memory: inputMemory, env: scriptEnv.env, log });
+  const shortcutStore = createShortcutStore({ file: join(state, "shortcuts.json") });
   // 在途统计交给桌面壳，壳据此决定能否重启安装更新（ADR-0018 / ADR-0022）：
   // 快捷方式任务（执行中、审批挂起）和进行中的对话轮次都算在途
   let taskActivity = { running: 0, pendingApproval: 0 };
@@ -270,6 +272,7 @@ async function buildAgent({ agentDir, log = console, onFatal, onActivity, onUpda
     onTargetsSaved,
     inputMemory,
     inputService,
+    shortcutStore,
     status: () => ({ hubConnected: tunnel.connected === true, hubRegistered: tunnel.registered === true }),
     settings: {
       read: () => ({

@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleDashed, CircleSlash, Clock, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, CircleDashed, CircleSlash, Clock, Loader2, SkipForward, XCircle } from "lucide-react";
 import type { LiveRun, RunSummary } from "@/lib/api";
 import { href } from "@/lib/router";
 import { failureText, formatDuration, stateLabel, stateTone, TONE_BG, TONE_TEXT, triggerLabel } from "@/lib/run-state";
@@ -24,6 +24,7 @@ export function StateIcon({ state, size = 15 }: { state?: string | null; size?: 
   if (state === "completed") return <CheckCircle2 size={size} className={cls} />;
   if (state === "failed" || state === "interrupted" || state === "rejected") return <XCircle size={size} className={cls} />;
   if (state === "canceled") return <CircleSlash size={size} className={cls} />;
+  if (state === "skipped") return <SkipForward size={size} className="text-faint" />;
   if (state === "working" || state === "open") return <Loader2 size={size} className={`${cls} animate-spin`} />;
   if (state === "queued" || state === "input-required") return <Clock size={size} className={cls} />;
   return <CircleDashed size={size} className="text-faint" />;

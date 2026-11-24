@@ -1,22 +1,29 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { getTargetInputs, type InputDescription } from "@/lib/api";
+import { isSwitchChoices } from "@/lib/switch-input";
 
 /**
  * 磁贴运行时输入的选择框（ADR-0020 §2）。
  * 打开时向本机要 inputs 描述：静态候选直接给，动态候选由查询工具现场给（最长 15 秒）；
  * 查询失败时显示原因并退化为自由输入。默认值已由 agent 解析（default: last 回显上次的值）。
  * 需要确认的 target，在这里点「执行」即视为确认，不再弹第二次。
+ * 快捷预设（ADR-0023）：only 只显示这些输入，preset 作为初值；提交时只返回显示出来的那几项。
  */
 export function InputsDialog({
   base,
   target,
+  only,
+  preset,
   onClose,
   onSubmit,
 }: {
   base: string;
   target: { id: string; title: string; requiresApproval?: boolean } | null;
+  only?: string[];
+  preset?: Record<string, string>;
   onClose: () => void;
   onSubmit: (vars: Record<string, string>) => void;
 }) {
@@ -30,16 +37,19 @@ export function InputsDialog({
     let cancelled = false;
     setInputs(null);
     setLoadError("");
-    getTargetInputs(base, target.id)
+    getTargetInputs(base, target.id, preset)
       .then((body) => {
         if (cancelled) return;
-        setInputs(body.inputs);
+        const shown = only ? body.inputs.filter((input) => only.includes(input.name)) : body.inputs;
+        setInputs(shown);
         const next: Record<string, string> = {};
         const free: Record<string, boolean> = {};
-        for (const input of body.inputs) {
-          next[input.name] = input.default ?? "";
-          const listed = input.choices.some((c) => c.value === input.default);
-          free[input.name] = input.choices.length === 0 || (Boolean(input.default) && !listed && input.allowCustom);
+        for (const input of shown) {
+          const raw = preset?.[input.name] ?? input.default ?? "";
+          const initial = isSwitchChoices(input.choices) && raw !== "true" ? "false" : raw;
+          next[input.name] = initial;
+          const listed = input.choices.some((c) => c.value === initial);
+          free[input.name] = input.choices.length === 0 || (Boolean(initial) && !listed && input.allowCustom);
         }
         setValues(next);
         setCustom(free);
@@ -50,6 +60,7 @@ export function InputsDialog({
     return () => {
       cancelled = true;
     };
+    // only / preset 随 target 一起换，按 target 触发即可
   }, [base, target]);
 
   if (!target) return null;
@@ -86,6 +97,18 @@ export function InputsDialog({
             const free = custom[input.name] || input.choices.length === 0;
             const label = `${input.label}${input.required ? "" : "（可空）"}`;
             const hint = input.error ? undefined : input.dynamic ? "候选由本机查询" : undefined;
+            if (isSwitchChoices(input.choices)) {
+              return (
+                <div key={input.name} className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2.5">
+                  <span className="text-[13px]">{input.label}</span>
+                  <Switch
+                    checked={values[input.name] === "true"}
+                    label={input.label}
+                    onChange={(next) => setValues((current) => ({ ...current, [input.name]: next ? "true" : "false" }))}
+                  />
+                </div>
+              );
+            }
             return (
               <Field key={input.name} label={label} hint={hint} error={input.error ? `${input.error}，可直接输入` : undefined}>
                 {free ? (

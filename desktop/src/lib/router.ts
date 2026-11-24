@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 /** 控制台 hash 路由（PRD-8）：#/targets、#/targets/:id/edit、#/runs/:taskId … */
 export type Route =
   | { page: "home" }
+  | { page: "shortcuts" }
   | { page: "chat" }
   | { page: "targets" }
   | { page: "target-new" }
@@ -14,9 +15,9 @@ export type Route =
   | { page: "logs" }
   | { page: "settings" };
 
-export type Section = "home" | "chat" | "targets" | "runs" | "packs" | "logs" | "settings";
+export type Section = "home" | "shortcuts" | "chat" | "targets" | "runs" | "packs" | "logs" | "settings";
 
-const SIMPLE = new Set(["home", "chat", "targets", "runs", "packs", "logs", "settings"]);
+const SIMPLE = new Set(["home", "shortcuts", "chat", "targets", "runs", "packs", "logs", "settings"]);
 
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map((part) => decodeURIComponent(part));

@@ -14,6 +14,7 @@ const STATE: Record<string, { label: string; tone: Tone }> = {
   interrupted: { label: "中断", tone: "bad" },
   open: { label: "运行中", tone: "accent" },
   pending: { label: "未开始", tone: "muted" },
+  skipped: { label: "已跳过", tone: "muted" },
 };
 
 export function stateLabel(state?: string | null) {
@@ -111,6 +112,12 @@ export function stepState(step: { exit?: number | null; endedAt?: string | null 
   if (step.endedAt) return "completed";
   if (runState === "working" || runState === "open") return "working";
   return runState === "completed" ? "completed" : runState === "failed" ? "failed" : runState;
+}
+
+/** 跳过行（agent-runtime skipLine，ADR-0024）：「[step i] 已跳过 命令（when 为 "…"）」。跳过的步骤不进 trace，只靠这一行识别。 */
+export function parseSkip(msg?: string) {
+  const match = /^\[step (\d+)\] 已跳过 (.*?)（when 为 (.*)）$/.exec(msg ?? "");
+  return match ? { step: Number(match[1]), command: match[2], value: match[3] } : null;
 }
 
 /** 进度日志行（agent-runtime：「进度 第 i 步：…」）。 */

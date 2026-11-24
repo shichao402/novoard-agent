@@ -3,6 +3,7 @@
  * 五种 step：script（shell）/ openApp / openPath / uses（能力包，契约 v2.4）/ template（装载期已展开）。
  * 插值 {{var}}：触发时 vars > target vars > 模板默认值；无来源即失败（不静默空串）。
  * 任一步失败即 target 失败（终态 failed，携带失败步骤号与 stderr 摘要）。
+ * when（契约 v2.9，ADR-0024）：插值后为假的步骤跳过，不起进程、不写 step/start|end，只经 onStepSkip 记一行日志。
  * cancel：SIGTERM（Windows 为不带 /F 的 taskkill /T）→ 宽限期后强杀整棵进程树；Unix 回收独立进程组。
  *   uses step 额外往 stdin 写一行 {"type":"cancel"} 并关闭 stdin（ADR-0019 §5）：Windows 上控制台进程
  *   收不到 SIGTERM，包只能靠这条收尾。宽限期 script/openApp/openPath 为 3 秒，uses 为 10 秒。
@@ -22,6 +23,13 @@ const DEFAULT_RETRY_INTERVAL_MS = 3_000;
 export const CANCEL_GRACE_MS = { script: 3_000, uses: 10_000 };
 /** 写给 uses 子进程 stdin 的取消指令。 */
 export const CANCEL_LINE = '{"type":"cancel"}\n';
+
+/** when 的假值（契约 v2.9）：去掉首尾空白、不分大小写后命中即跳过。 */
+const WHEN_FALSE = new Set(["", "false", "0", "no", "off"]);
+
+export function isWhenTrue(value) {
+  return !WHEN_FALSE.has(String(value ?? "").trim().toLowerCase());
+}
 
 /**
  * script step 的 shell 调用。Windows 与 Node 的 shell:true 一致：
@@ -57,6 +65,7 @@ export function createRunner({
   onDetail = () => {},
   onStepStart = () => {},
   onStepEnd = () => {},
+  onStepSkip = () => {},
 } = {}) {
   if (!Array.isArray(steps) || steps.length === 0) {
     throw new Error("steps 必须是非空数组");
@@ -83,7 +92,13 @@ export function createRunner({
         if (canceled) return { ok: false, step: i + 1, state: "canceled", stderr: "canceled before step" };
         let result;
         try {
-          result = await runStep(steps[i], resolved, i);
+          const skip = skipValue(steps[i], resolved);
+          if (skip !== null) {
+            try { onStepSkip({ index: i + 1, command: describeHead(steps[i]), when: steps[i].when, value: skip }); } catch { /* 记录失败不挡住执行 */ }
+            result = { ok: true, skipped: true };
+          } else {
+            result = await runStep(steps[i], resolved, i);
+          }
         } catch (error) {
           result = { ok: false, stderr: error?.message ?? String(error) };
         }
@@ -296,15 +311,22 @@ export function createRunner({
     if (process.platform !== "win32") terminateTree(child.pid, true);
   }
 
+  function describeHead(step) {
+    if (typeof step.script === "string") return step.script;
+    if (typeof step.openApp === "string") return `openApp ${step.openApp}`;
+    if (typeof step.uses === "string") return `uses ${step.uses}`;
+    return `openPath ${step.openPath ?? ""}`;
+  }
+
   function describeStep(step, index) {
-    const head = typeof step.script === "string"
-      ? step.script
-      : typeof step.openApp === "string"
-        ? `openApp ${step.openApp}`
-        : typeof step.uses === "string"
-          ? `uses ${step.uses}`
-          : `openPath ${step.openPath ?? ""}`;
-    return `step ${index + 1}/${steps.length}: ${head.slice(0, 60)}`;
+    return `step ${index + 1}/${steps.length}: ${describeHead(step).slice(0, 60)}`;
+  }
+
+  /** when（契约 v2.9）：没写或为真返回 null；为假返回插值后的值，供日志说明。插值无来源照常抛错。 */
+  function skipValue(step, vars) {
+    if (step?.when === undefined || step?.when === null) return null;
+    const value = interp(step.when, vars);
+    return isWhenTrue(value) ? null : value;
   }
 
   function openCmd(target, vars) {

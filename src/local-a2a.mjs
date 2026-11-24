@@ -9,6 +9,7 @@
  * 本地闭环（PRD-1 AC2）：hub 不在线时本端点完整可用；hub 在线时终态经隧道上行同步给 hub 队列。
  */
 import { resolveInputs, hasInputs } from "./inputs.mjs";
+import { shortcutProblems } from "./shortcuts.mjs";
 import { toolKind } from "./packs/registry.mjs";
 import { createServer } from "node:http";
 import { isIP } from "node:net";
@@ -108,7 +109,7 @@ export function handleDesktopCors(req, res) {
   return false;
 }
 
-export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, runTraceDir = null, chat, peer, profile, packManager = null, packRegistry = null, gitAuth = null, diagnoseTarget = null, schedule = null, inputMemory = null, inputService = null } = {}) {
+export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiRoot = null, targets, card, runtime, audit, log = console, triggerHook, store, onTargetsSaved, status, settings, codebuddy, activityFile, logFile, shortcutLogDir, runTraceDir = null, chat, peer, profile, packManager = null, packRegistry = null, gitAuth = null, diagnoseTarget = null, schedule = null, inputMemory = null, inputService = null, shortcutStore = null } = {}) {
   const access = createUiAccess({ host, token: uiToken });
   const tasks = createLocalTasks();
   /** 热替换后的 targets 注册表（editor 保存后 onTargetsSaved 装配层刷新；与 runtime replaceTargets 同步） */
@@ -400,9 +401,34 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
       const def = getTargets()[id];
       if (!def) return json(res, 404, { ok: false, reason: `unknown target: ${id}` });
       if (!inputService) return json(res, 200, { ok: true, id, title: def.title ?? id, inputs: [] });
-      inputService.describe(id, def)
+      inputService.describe(id, def, parseVarsParam(url.searchParams.get("vars")))
         .then((d) => json(res, 200, { ok: true, ...d }))
         .catch((error) => json(res, 500, { ok: false, reason: error?.message ?? String(error) }));
+      return;
+    }
+    // 快捷预设（ADR-0023）：本机界面配置，运行时仍走 /a2a 触发 target
+    if (url.pathname === "/api/shortcuts" && (req.method === "GET" || req.method === "PUT")) {
+      if (!shortcutStore) return json(res, 404, { ok: false, reason: "快捷未装配" });
+      const withProblems = (list) => {
+        const problems = {};
+        for (const item of list) {
+          const found = shortcutProblems(item, getTargets());
+          if (found.length > 0) problems[item.id] = found;
+        }
+        return problems;
+      };
+      if (req.method === "GET") {
+        const shortcuts = shortcutStore.list();
+        return json(res, 200, { ok: true, shortcuts, problems: withProblems(shortcuts) });
+      }
+      if (!sameOrigin(req, { allowRemote: access.remote })) return json(res, 403, { ok: false, reason: "写端点来源不合法" });
+      readJsonBody(req, 256 * 1024).then((body) => {
+        if (!body.ok) return json(res, 400, { ok: false, reason: body.reason });
+        const saved = shortcutStore.save(body.data?.shortcuts);
+        if (!saved.ok) return json(res, 422, { ok: false, errors: saved.errors });
+        audit?.({ lane: "local", target: "shortcuts", outcome: "accepted", detail: { via: "console", count: saved.shortcuts.length } });
+        json(res, 200, { ok: true, shortcuts: saved.shortcuts, problems: withProblems(saved.shortcuts) });
+      }).catch((error) => json(res, 500, { ok: false, reason: error.message }));
       return;
     }
     // 定时总开关与立即补跑（PRD-7 A7）
@@ -894,6 +920,19 @@ export function createLocalA2A({ port = 0, host = "127.0.0.1", uiToken = "", uiR
     },
     access,
   };
+}
+
+/** ?vars=<json>：只收字符串、数字、布尔值，其余忽略；解析失败视为没有覆盖。 */
+function parseVarsParam(raw) {
+  if (!raw) return null;
+  let data;
+  try { data = JSON.parse(raw); } catch { return null; }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const out = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && ["string", "number", "boolean"].includes(typeof value)) out[key] = String(value);
+  }
+  return out;
 }
 
 function readJsonBody(req, limit = 64 * 1024) {

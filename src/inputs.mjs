@@ -247,9 +247,15 @@ export function createInputService({ packs = null, memory = null, env = process.
     return { ...base, choices: res.choices };
   }
 
-  /** → { id, title, inputs: [...] }；多个 input 的查询并行。 */
-  async function describe(targetId, target) {
-    const inputs = await Promise.all(inputsOf(target).map((input) => describeInput({ targetId, target, input })));
+  /**
+   * → { id, title, inputs: [...] }；多个 input 的查询并行。
+   * overrides：快捷预设（ADR-0023）带来的变量，覆盖 target vars 后再插值候选查询的 cwd/with。
+   */
+  async function describe(targetId, target, overrides = null) {
+    const effective = overrides && Object.keys(overrides).length > 0
+      ? { ...target, vars: { ...(target?.vars ?? {}), ...overrides } }
+      : target;
+    const inputs = await Promise.all(inputsOf(effective).map((input) => describeInput({ targetId, target: effective, input })));
     return { id: targetId, title: target?.title ?? targetId, inputs };
   }
 

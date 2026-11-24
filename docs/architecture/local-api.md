@@ -7,7 +7,9 @@
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/tiles` | 磁贴数据：targets + 各 target 最近一次执行 + 最近 20 个任务 |
-| `GET` | `/api/targets/:id/inputs` | 点击时的运行时输入描述：现场调查询工具取候选项、解析默认值（[ADR-0020](../adr/0020-tile-runtime-inputs.md)） |
+| `GET` | `/api/targets/:id/inputs?vars=` | 点击时的运行时输入描述：现场调查询工具取候选项、解析默认值（[ADR-0020](../adr/0020-tile-runtime-inputs.md)）；可选 `vars` 为 JSON 对象，覆盖 target vars 后再插值候选查询（[ADR-0023](../adr/0023-shortcut-presets.md)） |
+| `GET` | `/api/shortcuts` | 快捷预设列表：`{ ok, shortcuts, problems }`，`problems` 按 id 列出与当前 targets 对照的问题（[ADR-0023](../adr/0023-shortcut-presets.md)） |
+| `PUT` | `/api/shortcuts` | 整体替换快捷：`{ shortcuts }`；同源校验，结构不合法 `422`，写审计 `target: "shortcuts"` |
 | `GET` | `/api/stream/:taskId` | SSE 订阅单任务；先写快照帧，终态后关流 |
 | `GET` | `/api/runs?target=&limit=` | 运行视图（[ADR-0021](../adr/0021-run-history-from-trace.md)）：`{ live, runs, retentionDays }`，`runs` 按开始时间倒序，`limit` 默认 50、最大 500 |
 | `GET` | `/api/runs/:taskId` | 单次运行：`{ run, lines, truncated }`，`lines` 按时间正序并带 `step` 归属；超过保留期返回 `404` |

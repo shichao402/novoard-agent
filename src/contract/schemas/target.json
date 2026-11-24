@@ -148,20 +148,27 @@
         "env": {
           "type": "object",
           "additionalProperties": { "type": "string" }
-        }
+        },
+        "when": { "$ref": "#/$defs/when" }
       },
       "additionalProperties": false
     },
     "stepOpenApp": {
       "type": "object",
       "required": ["openApp"],
-      "properties": { "openApp": { "type": "string", "minLength": 1 } },
+      "properties": {
+        "openApp": { "type": "string", "minLength": 1 },
+        "when": { "$ref": "#/$defs/when" }
+      },
       "additionalProperties": false
     },
     "stepOpenPath": {
       "type": "object",
       "required": ["openPath"],
-      "properties": { "openPath": { "type": "string", "minLength": 1 } },
+      "properties": {
+        "openPath": { "type": "string", "minLength": 1 },
+        "when": { "$ref": "#/$defs/when" }
+      },
       "additionalProperties": false
     },
     "stepTemplate": {
@@ -188,9 +195,15 @@
         },
         "cwd": { "type": "string", "description": "工程根，传给工具 --project-root，也是路径锁的键" },
         "retry": { "type": "integer", "minimum": 0, "maximum": 10 },
-        "retryInterval": { "type": "string", "pattern": "^\\d+(s|m|h|d)$" }
+        "retryInterval": { "type": "string", "pattern": "^\\d+(s|m|h|d)$" },
+        "when": { "$ref": "#/$defs/when" }
       },
       "additionalProperties": false
+    },
+    "when": {
+      "type": "string",
+      "minLength": 1,
+      "description": "执行条件（契约 v2.9）：插值后为空串、false、0、no、off（不分大小写、忽略首尾空白）时跳过这一步，记为 skipped，不算失败；其余值照常执行。不支持表达式"
     }
   }
 }

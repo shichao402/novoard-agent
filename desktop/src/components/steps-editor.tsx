@@ -305,6 +305,15 @@ function UsesStepForm({
   );
 }
 
+/** 执行条件（契约 v2.9，ADR-0024）：插值后为空、false、0、no、off 时跳过这一步。 */
+function WhenField({ value, onChange }: { value: string; onChange: (when: string) => void }) {
+  return (
+    <Field label="执行条件" hint="可留空，表示总是执行。填 {{输入名}} 引用运行时输入，值为空、false、0、no、off 时跳过这一步，不算失败">
+      <Input value={value} placeholder="例如 {{openRider}}" spellCheck={false} onChange={(event) => onChange(event.target.value)} />
+    </Field>
+  );
+}
+
 export function StepsEditor({
   steps,
   packs,
@@ -329,12 +338,13 @@ export function StepsEditor({
     next.splice(index + offset, 0, item);
     onChange(next);
   };
-  const changeKind = (index: number, kind: NewStepKind) => onChange(steps.map((step, i) => (i === index ? newStep(kind) : step)));
+  const changeKind = (index: number, kind: NewStepKind) =>
+    onChange(steps.map((step, i) => (i === index ? ({ ...newStep(kind), when: "when" in step ? step.when : "" } as DraftStep) : step)));
 
   return (
     <section className="space-y-3 rounded-xl border border-line p-4">
       <h3 className="text-[13px] font-medium">步骤</h3>
-      <p className="text-[11px] leading-5 text-faint">按顺序执行，一步失败后面就不再跑。</p>
+      <p className="text-[11px] leading-5 text-faint">按顺序执行，一步失败后面就不再跑。填了执行条件的步骤，条件为假时跳过。</p>
       {steps.map((step, index) => (
         <div key={step.key} className="space-y-3 rounded-lg border border-line-hi p-3">
           <div className="flex items-center gap-2">
@@ -378,7 +388,9 @@ export function StepsEditor({
           ) : null}
           {step.kind === "template" ? (
             <p className="text-[12px] leading-5 text-faint">模板步骤由 templates.yaml 定义，这里只能调整顺序或删除。</p>
-          ) : null}
+          ) : (
+            <WhenField value={step.when} onChange={(when) => patch(index, { when })} />
+          )}
         </div>
       ))}
       <div className="flex items-center gap-2">

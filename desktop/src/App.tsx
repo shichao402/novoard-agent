@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { Activity, LayoutDashboard, MessageSquare, Package, ScrollText, Settings, SquareTerminal } from "lucide-react";
+import { Activity, LayoutDashboard, MessageSquare, Package, ScrollText, Settings, SquareTerminal, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EditionMark } from "@/components/edition-mark";
 import { edition } from "@/lib/edition";
@@ -14,12 +14,14 @@ import { RunDetailPage } from "@/pages/run-detail-page";
 import { RunsPage } from "@/pages/runs-page";
 import { SettingsPage } from "@/pages/settings-page";
 import { SetupPage } from "@/pages/setup-page";
+import { ShortcutsPage } from "@/pages/shortcuts-page";
 import { TargetDetailPage } from "@/pages/target-detail-page";
 import { TargetEditPage } from "@/pages/target-edit-page";
 import { TargetsListPage } from "@/pages/targets-list-page";
 
 const NAV: Array<{ id: Section; label: string; icon: typeof LayoutDashboard }> = [
   { id: "home", label: "概览", icon: LayoutDashboard },
+  { id: "shortcuts", label: "快捷", icon: Zap },
   { id: "chat", label: "对话", icon: MessageSquare },
   { id: "targets", label: "Target", icon: SquareTerminal },
   { id: "runs", label: "运行", icon: Activity },
@@ -184,6 +186,7 @@ export function App() {
         ) : null}
         <div className={`min-h-0 flex-1 ${fill ? "overflow-hidden p-4" : "overflow-auto p-5"}`}>
           {route.page === "home" ? <HomePage base={base} runtime={runtime} tiles={tiles} onOpen={(next) => navigate(next)} /> : null}
+          {route.page === "shortcuts" ? <ShortcutsPage base={base} tiles={tiles} onChanged={reload} /> : null}
           {route.page === "chat" ? <ChatPage base={base} /> : null}
           {route.page === "targets" ? <TargetsListPage base={base} tiles={tiles} schedule={schedule} onChanged={reload} /> : null}
           {route.page === "target-new" ? <TargetEditPage key="new" base={base} id={null} onSaved={reload} /> : null}

@@ -6,7 +6,7 @@
  * 硬截止（契约 v2.4 deadline）：定时触发带 deadlineAt，到点等同取消，终态 failed。
  * 主日志只记开始、结束和拒绝，并带上快捷方式内部日志的相对路径。
  */
-import { createRunner } from "./runner.mjs";
+import { createRunner, isWhenTrue } from "./runner.mjs";
 import { parseDuration } from "./duration.mjs";
 import { createShortcutRun } from "./shortcut-log.mjs";
 import { openRunTrace, pruneRunTraces } from "./run-trace.mjs";
@@ -17,6 +17,11 @@ const DEFAULT_TIMEOUT = "10m";
 const DEFAULT_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 32;
 const VAR_RE = /\{\{(\w+)\}\}/g;
+
+/** 跳过步骤的日志行。桌面运行详情按「[step N] 已跳过 <步骤>（when …）」识别，改格式要同步 desktop/src/lib/run-state.ts 的 parseSkip。 */
+export function skipLine(index, command, value) {
+  return `[step ${index}] 已跳过 ${String(command).slice(0, 80)}（when 为 ${JSON.stringify(String(value))}）`;
+}
 
 export function createAgentRuntime({ targets, log = console, shortcutLogDir, runTraceDir, bootId = "", concurrency = MAX_CONCURRENCY, onActivity, scriptEnv = null, packs = null, packInstaller = null, diagnose = null, pathLocks = createPathLocks(), now = () => Date.now() } = {}) {
   /** taskId → { state, runner?, queued?, ctx?, pending? } */
@@ -243,6 +248,12 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
           ctx.runLog?.setStep?.(0);
           emitTrace(ctx, { type: "step/end", index, exit, target: skillId });
         },
+        // when 为假（ADR-0024）：运行记录不写事件（task.json 的 trace 是封闭 schema），只在输出日志里记一行，界面据此标「已跳过」
+        onStepSkip: ({ index, command, value }) => {
+          ctx.runLog?.setStep?.(index);
+          ctx.runLog?.info(skipLine(index, command, value));
+          ctx.runLog?.setStep?.(0);
+        },
       });
     } catch (error) {
       running.delete(taskId);
@@ -293,7 +304,7 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
     ctx.lock?.release();
   }
 
-  /** 收集需要独占工作区的 uses step 的 cwd（插值失败的交给 runner 报错，这里不加锁）。 */
+  /** 收集需要独占工作区的 uses step 的 cwd（插值失败的交给 runner 报错，这里不加锁）。when 为假的步骤不会执行，也不占锁。 */
   function lockKeysFor(steps, vars) {
     if (!packs || !Array.isArray(steps)) return [];
     const keys = [];
@@ -305,16 +316,21 @@ export function createAgentRuntime({ targets, log = console, shortcutLogDir, run
       if (!tool?.requiresExclusiveWorkspace) continue;
       let cwd;
       try {
-        cwd = step.cwd.replace(VAR_RE, (_, key) => {
-          if (!(key in vars)) throw new Error(key);
-          return String(vars[key]);
-        });
+        if (typeof step.when === "string" && !isWhenTrue(interpStrict(step.when, vars))) continue;
+        cwd = interpStrict(step.cwd, vars);
       } catch {
         continue;
       }
       keys.push(normalizePathKey(cwd));
     }
     return keys;
+  }
+
+  function interpStrict(text, vars) {
+    return text.replace(VAR_RE, (_, key) => {
+      if (!(key in vars)) throw new Error(key);
+      return String(vars[key]);
+    });
   }
 
   let lastPrune = 0;

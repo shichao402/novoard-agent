@@ -7,10 +7,10 @@ export const TIME_RE: RegExp;
 export type ParamValue = string | number | boolean | string[];
 
 export type DraftStep =
-  | { key: string; kind: "uses"; uses: string; with: Record<string, ParamValue | undefined>; cwd: string; retry: string; retryInterval: string }
-  | { key: string; kind: "script"; script: string; cwd: string; env?: Record<string, string> }
-  | { key: string; kind: "openApp"; value: string }
-  | { key: string; kind: "openPath"; value: string }
+  | { key: string; kind: "uses"; uses: string; with: Record<string, ParamValue | undefined>; cwd: string; retry: string; retryInterval: string; when: string }
+  | { key: string; kind: "script"; script: string; cwd: string; when: string; env?: Record<string, string> }
+  | { key: string; kind: "openApp"; value: string; when: string }
+  | { key: string; kind: "openPath"; value: string; when: string }
   | { key: string; kind: "template"; template: string };
 
 export type StepKind = DraftStep["kind"];

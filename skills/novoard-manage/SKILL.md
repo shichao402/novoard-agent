@@ -106,6 +106,14 @@ CLI 不提供、本 skill 也不做的事：开关定时总开关、改 Hub 地�
 5. `cwd` 是工程根，同一 cwd 的步骤会排队，不会同时跑。会改工作副本、而工程可能被 IDE 或其他程序占着时，前面先放一步占用释放类工具（如 `general/release-occupants`，以清单为准）。
 6. `kind: "query"` 的工具只能用在 inputs 的 choices 里，不能当步骤。
 
+执行条件 `when`（script、openApp、openPath、uses 都能写，template 不能）：
+
+- 同一个 Target 有几步「这次做、下次不做」（如开不开 Rider、要不要先 svn update）时，不要拆成两个 Target，给这几步写 `when: "{{开关输入名}}"`。
+- `when` 先插值，结果去掉首尾空白后为空、`false`、`0`、`no`、`off`（不分大小写）时跳过这一步，其余值照常执行。跳过不算失败，日志里记一行「已跳过」。
+- 只判断真假，不支持 `==`、`&&` 这类表达式；要按值分流，就让输入直接给出开关值。
+- `{{name}}` 没有来源（inputs、vars、触发参数都没有）时整次运行失败，不会当作假。
+- 示例：`{ openApp: rider, when: "{{openRider}}" }`，配一项开关输入 `openRider`。
+
 ### 定时
 
 - `schedule`：5 段 cron（分 时 日 月 周），按 agent 时区（`schedule` 的 timezone）解释。例：每天 2:10 是 `10 2 * * *`，工作日 9 点是 `0 9 * * 1-5`，每 15 分钟是 `*/15 * * * *`。
@@ -118,11 +126,13 @@ CLI 不提供、本 skill 也不做的事：开关定时总开关、改 Hub 地�
 
 同一个 Target 每次要不同参数（分支、渠道、环境）时，不要为每个值建一张卡，加 `inputs`。每项：
 
-- `name`：与 `{{name}}` 对应，不能和 vars 重名。`{{name}}` 可以出现在 script、cwd、env、`with` 里。
+- `name`：与 `{{name}}` 对应，不能和 vars 重名。`{{name}}` 可以出现在 script、cwd、env、`with`、`when` 里。
 - `label`：给人看的名字。
 - `choices`：字符串数组，或 `{ uses: <包>/<查询工具>, cwd: <工程根>, with: {...} }`（查询工具在工具清单里标 `kind: "query"`）。
 - `default`：固定值，或 `last`（取上次选的）。
 - `allowCustom`、`required`。
+
+开关输入：`choices: ["true", "false"]`，再给 `default`（如 `"false"`），桌面端显示为开关，配合步骤的 `when` 决定某几步跑不跑。
 
 带 schedule 的 Target，必填输入要有固定的 default，不能用 last。
 
@@ -178,7 +188,7 @@ CLI 不提供、本 skill 也不做的事：开关定时总开关、改 Hub 地�
 
 典型 Target（工具 id 与参数以 `pack-tools <包名>` 为准）：
 
-1. 开分支：inputs 一项 `branch`，`choices: { uses: workingCopyPool/candidates, cwd: "{{poolRoot}}" }`，`allowCustom: true`，`default: last`；步骤 `workingCopyPool/acquire`（`with: { branch: "{{branch}}" }`），需要时接 `general/unity-open`（`projectPath` 指向分支入口下的 Unity 工程目录）。
+1. 开分支：inputs 一项 `branch`，`choices: { uses: workingCopyPool/candidates, cwd: "{{poolRoot}}" }`，`allowCustom: true`，`default: last`；步骤 `workingCopyPool/acquire`（`with: { branch: "{{branch}}" }`），需要时接 `general/unity-open`（`projectPath` 指向分支入口下的 Unity 工程目录）。要不要顺带开 Rider 等 IDE，用一项开关输入加该步的 `when`，不要再建一个 Target。
 2. 固定开工（如每天早上开常驻分支）：acquire → `general/release-occupants`（仅 Windows）→ `versionControl/svn-update` → `general/unity-open`。带 schedule 的 branch 用固定值，不用 last。
 3. 释放：inputs 的 choices 用 `workingCopyPool/occupied`（同样带 cwd），步骤 `workingCopyPool/release`。
 4. 夜间维护：`workingCopyPool/gc` → `workingCopyPool/refresh`，配 schedule 和 deadline。

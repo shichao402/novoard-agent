@@ -235,3 +235,28 @@ test("ADR-0020：表单编辑 inputs——三种候选来源往返、with 沿用
   ]);
   assert.deepEqual(newDraft([]).inputs, []);
 });
+
+test("ADR-0024：四种步骤的 when 往返不丢，清空后不写", () => {
+  const target = {
+    title: "准备工程",
+    expose: "local",
+    audit: "none",
+    notify: "never",
+    requiresApproval: false,
+    vars: {},
+    steps: [
+      { uses: "svn/update", cwd: "D:/p", when: "{{doUpdate}}" },
+      { script: "echo hi", when: "{{openRider}}" },
+      { openApp: "rider", when: "{{openRider}}" },
+      { openPath: "D:/p", when: "off" },
+      { script: "echo always" },
+    ],
+  };
+  const draft = toDraft("prep", target);
+  assert.deepEqual(draft.steps.map((step) => step.when), ["{{doUpdate}}", "{{openRider}}", "{{openRider}}", "off", ""]);
+  const def = toDef(draft, target);
+  assert.deepEqual(def.steps, target.steps);
+  draft.steps[1].when = "  ";
+  assert.equal("when" in toDef(draft, target).steps[1], false);
+  assert.equal(newStep("openApp").when, "");
+});
