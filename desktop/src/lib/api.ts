@@ -232,7 +232,7 @@ export type PackEntry = {
   problemCode?: string;
   /** 已装、但 Hub 已不再下发其来源。 */
   orphan?: boolean;
-  /** 本机会给这个仓库用哪条 Git 凭据；null 表示按公开仓访问。 */
+  /** 本机会给这个仓库用哪条 Git 凭据；null 表示不带令牌：HTTPS 按公开仓拉，SSH 地址用本机 SSH 密钥。 */
   credential?: GitCredential | null;
 };
 

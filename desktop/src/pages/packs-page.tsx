@@ -97,7 +97,7 @@ export function PacksPage({ base }: { base: string }) {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
       <p className="text-xs leading-5 text-muted">
-        Hub 管理台「能力包来源」页只登记仓库地址和分支，连上 Hub 后同步到这台机器；本机会扫描仓库里所有 toolset.json，子目录和包名都不用手填。私有仓请先在「设置 → Git 凭据」配置访问令牌。
+        Hub 管理台「能力包来源」页只登记仓库地址和分支，连上 Hub 后同步到这台机器；本机会扫描仓库里所有 toolset.json，子目录和包名都不用手填。私有仓二选一：地址写成 SSH 形式（git@…），用本机 SSH 密钥拉；或者用 HTTPS 地址，在「设置 → Git 凭据」配置访问令牌。
       </p>
       {error ? <p className="text-sm text-bad" role="alert">{error}</p> : null}
       {note ? <p className="text-xs text-muted" aria-live="polite">{note}</p> : null}
@@ -177,8 +177,8 @@ export function PacksPage({ base }: { base: string }) {
                         <div className="mt-1 flex items-center gap-1 text-faint" title={`用户名 ${pack.credential.username}，令牌尾号 ${pack.credential.tokenLastFour}`}>
                           <KeyRound size={11} />凭据 {pack.credential.url}
                         </div>
-                      ) : pack.source ? (
-                        <div className="mt-1 text-faint">按公开仓访问</div>
+                      ) : pack.source && accessHint(pack.source.git) ? (
+                        <div className="mt-1 text-faint">{accessHint(pack.source.git)}</div>
                       ) : null}
                     </td>
                     <td className="px-4 py-3">
@@ -224,6 +224,14 @@ export function PacksPage({ base }: { base: string }) {
 
 function repoLabel(repo: PackRepo) {
   return repo.git.replace(/\/+$/, "").replace(/\.git$/, "").split(/[/:]/).pop() || repo.git;
+}
+
+/** 没命中 Git 凭据时实际怎么访问：SSH 地址（git@host:path、ssh://）用本机 SSH 密钥，HTTPS 按公开仓拉；其他写法不提示。 */
+function accessHint(git: string) {
+  const url = git.trim();
+  if (/^ssh:\/\//i.test(url) || /^[^@/\s]+@[^:/\s]+:/.test(url)) return "使用本机 SSH 密钥";
+  if (/^https?:\/\//i.test(url)) return "按公开仓访问";
+  return null;
 }
 
 function formatTime(iso: string) {

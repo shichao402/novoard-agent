@@ -236,7 +236,7 @@ A6、A7 已实现，配套的 novoard-packs P4–P5、OSGToolset O2–O3 也一�
 - 匹配：按 URL 路径段做前缀匹配，取最长的那条；末段忽略 `.git`。只接受 http/https，地址里不能带账号。用户名缺省时 github.com 用 `x-access-token`，其他用 `oauth2`。
 - 注入：每次调 git 都用 `GIT_CONFIG_COUNT` 追加 `credential.helper=`（不读本机 helper）；命中凭据时再追加 `http.<仓库地址>.extraHeader=Authorization: Basic …`。同时设 `GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND=ssh -o BatchMode=yes`，认证失败直接报错，不会卡在交互提示上。认证类错误提示去「设置 → Git 凭据」。
 - 接口：`GET /api/git-credentials`（只返回 url、username、tokenLastFour），`PUT /api/git-credentials`（body `{url, username?, token?, originalUrl?}`，编辑时 token 留空沿用原值），`DELETE /api/git-credentials?url=`。写接口校验同源，审计不含 token。
-- 桌面端：设置页新增「Git 凭据」区块，可增删改；能力包页每行显示命中的凭据，没命中显示「按公开仓访问」。
+- 桌面端：设置页新增「Git 凭据」区块，可增删改；能力包页每行显示命中的凭据，没命中时按地址类型显示：HTTPS 显示「按公开仓访问」，SSH 地址显示「使用本机 SSH 密钥」（2026-11-26 起，此前一律显示「按公开仓访问」）。
 
 ### 能力包页
 
