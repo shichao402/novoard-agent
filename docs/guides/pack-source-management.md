@@ -6,8 +6,8 @@
 
 ```powershell
 python <skill>/scripts/novoard.py pack-sources list
-python <skill>/scripts/novoard.py pack-sources add --git git@git.woa.com:firoyang/OSGToolset.git --branch main
-python <skill>/scripts/novoard.py pack-sources update --key <ps-key> --git git@git.woa.com:firoyang/OSGToolset.git
+python <skill>/scripts/novoard.py pack-sources add --git git@git.example.com:team/my-packs.git --branch main
+python <skill>/scripts/novoard.py pack-sources update --key <ps-key> --git git@git.example.com:team/my-packs.git
 python <skill>/scripts/novoard.py pack-sources remove --key <ps-key> --confirm
 python <skill>/scripts/novoard.py sync-pack-sources
 python <skill>/scripts/novoard.py packs
