@@ -167,6 +167,7 @@ jobs:
           name: relkit-out-${{ matrix.relkit-target }}
           path: ${{ env.RELKIT_OUT }}
           if-no-files-found: error
+          retention-days: 1
       - name: Attach installer to GitHub Release
         if: env.RELKIT_CHANNEL == 'stable'
         uses: softprops/action-gh-release@v2
@@ -242,6 +243,7 @@ jobs:
         with:
           name: novoard-agent-linux-x64
           path: novoard-agent-linux-x64.zip
+          retention-days: 1
       - uses: softprops/action-gh-release@v2
         with:
           files: novoard-agent-linux-x64.zip
